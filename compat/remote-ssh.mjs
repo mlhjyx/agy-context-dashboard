@@ -1,6 +1,8 @@
 import { createServer, request } from 'node:http';
 import { createServer as createNetServer } from 'node:net';
-import { spawn } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { dirname } from 'node:path';
 
 const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost']);
 const HOST_CHARS = /^[A-Za-z0-9._:@\[\]-]+$/;
@@ -34,6 +36,52 @@ export function sanitizeRemoteHost(value) {
   if (!cleaned || cleaned.length > MAX_REMOTE_HOST_LEN) return null;
   if (!HOST_CHARS.test(cleaned)) return null;
   return cleaned;
+}
+
+export function parseSshTarget(value) {
+  const cleaned = sanitizeRemoteHost(value);
+  if (!cleaned) return null;
+  let user = null;
+  let hostPart = cleaned;
+  const atIdx = cleaned.lastIndexOf('@');
+  if (atIdx !== -1) {
+    user = cleaned.slice(0, atIdx);
+    hostPart = cleaned.slice(atIdx + 1);
+    if (!user || user.startsWith('-') || !/^[A-Za-z0-9._-]+$/.test(user)) return null;
+  }
+  if (!hostPart || hostPart.startsWith('-')) return null;
+
+  let host = hostPart;
+  let port = null;
+  if (hostPart.startsWith('[')) {
+    const m = hostPart.match(/^\[([0-9A-Fa-f:.]+)\](?::(\d{1,5}))?$/);
+    if (!m) return null;
+    host = m[1];
+    if (m[2] !== undefined) {
+      const p = Number(m[2]);
+      if (!Number.isInteger(p) || p < 1 || p > 65535) return null;
+      port = p;
+    }
+  } else {
+    const firstColon = hostPart.indexOf(':');
+    const lastColon = hostPart.lastIndexOf(':');
+    if (firstColon !== -1 && firstColon === lastColon) {
+      const h = hostPart.slice(0, firstColon);
+      const pStr = hostPart.slice(firstColon + 1);
+      if (!h || h.startsWith('-') || !/^\d{1,5}$/.test(pStr)) return null;
+      const p = Number(pStr);
+      if (!Number.isInteger(p) || p < 1 || p > 65535) return null;
+      host = h;
+      port = p;
+    } else if (hostPart.includes('[') || hostPart.includes(']')) {
+      return null;
+    }
+  }
+  if (!host || host.startsWith('-')) return null;
+  return {
+    target: user ? `${user}@${host}` : host,
+    port,
+  };
 }
 
 export function validateBridgePort(value) {
@@ -607,12 +655,56 @@ export function probeBridgeHealth(port, { timeoutMs = 450, requestFn = request }
   });
 }
 
+function defaultReadTunnelState(stateFile) {
+  try {
+    const raw = readFileSync(stateFile, 'utf8');
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function defaultWriteTunnelState(stateFile, entries) {
+  try {
+    mkdirSync(dirname(stateFile), { recursive: true });
+    writeFileSync(stateFile, JSON.stringify(entries), { mode: 0o600 });
+  } catch {}
+}
+
+function defaultInspectPidCommand(pid) {
+  if (process.platform === 'win32') return '';
+  try {
+    return execFileSync('ps', ['-p', String(pid), '-o', 'command='], {
+      encoding: 'utf8',
+      timeout: 1000,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+  } catch {
+    return '';
+  }
+}
+
+function defaultKillPid(pid) {
+  try {
+    process.kill(pid, 'SIGTERM');
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export class RemoteSshTunnelManager {
   constructor({
     sshBin = process.env.ANTIGRAVITY_SSH_BIN || 'ssh',
     spawnFn = spawn,
     allocatePortFn = allocateLoopbackPort,
     probeHealthFn = probeBridgeHealth,
+    stateFile = null,
+    readStateFn = defaultReadTunnelState,
+    writeStateFn = defaultWriteTunnelState,
+    inspectPidFn = defaultInspectPidCommand,
+    killPidFn = defaultKillPid,
     now = Date.now,
     idleMs = 120000,
     readyTimeoutMs = 4000,
@@ -624,6 +716,11 @@ export class RemoteSshTunnelManager {
     this.spawnFn = spawnFn;
     this.allocatePortFn = allocatePortFn;
     this.probeHealthFn = probeHealthFn;
+    this.stateFile = typeof stateFile === 'string' && stateFile ? stateFile : null;
+    this.readStateFn = readStateFn;
+    this.writeStateFn = writeStateFn;
+    this.inspectPidFn = inspectPidFn;
+    this.killPidFn = killPidFn;
     this.now = now;
     this.idleMs = idleMs;
     this.readyTimeoutMs = readyTimeoutMs;
@@ -633,8 +730,67 @@ export class RemoteSshTunnelManager {
     this.tunnels = new Map();
     this.failures = new Map();
     this.disposed = false;
+    if (this.stateFile) this.reapOrphans();
     this.reaper = setInterval(() => this.reapIdle(), Math.min(30000, Math.max(5000, Math.floor(idleMs / 2))));
     this.reaper.unref?.();
+  }
+
+  _tunnelKey(parsed, rPort) {
+    return `${parsed.target.toLowerCase()}${parsed.port ? `:${parsed.port}` : ''}/${rPort}`;
+  }
+
+  _persistState() {
+    if (!this.stateFile) return;
+    const records = [];
+    for (const entry of this.tunnels.values()) {
+      const pid = entry.child?.pid;
+      if (!entry.closed && Number.isInteger(pid) && pid > 1) {
+        records.push({
+          pid,
+          host: entry.host,
+          localPort: entry.endpoint.port,
+          remotePort: entry.remotePort,
+          createdAt: entry.createdAt,
+        });
+      }
+    }
+    try {
+      this.writeStateFn(this.stateFile, records);
+    } catch {}
+  }
+
+  reapOrphans() {
+    if (!this.stateFile) return 0;
+    let reaped = 0;
+    let prev = [];
+    try {
+      prev = this.readStateFn(this.stateFile);
+    } catch {
+      prev = [];
+    }
+    if (Array.isArray(prev)) {
+      for (const item of prev) {
+        const pid = Number(item?.pid);
+        const localPort = Number(item?.localPort);
+        const remotePort = Number(item?.remotePort);
+        if (!Number.isInteger(pid) || pid <= 1 || pid === process.pid) continue;
+        if (!Number.isInteger(localPort) || !Number.isInteger(remotePort)) continue;
+        let cmd = '';
+        try {
+          cmd = String(this.inspectPidFn(pid) || '');
+        } catch {
+          cmd = '';
+        }
+        const expectedForward = `127.0.0.1:${localPort}:127.0.0.1:${remotePort}`;
+        if (/\bssh\b/i.test(cmd) && cmd.includes(expectedForward)) {
+          try {
+            if (this.killPidFn(pid) !== false) reaped++;
+          } catch {}
+        }
+      }
+    }
+    this._persistState();
+    return reaped;
   }
 
   _killEntry(entry) {
@@ -658,33 +814,37 @@ export class RemoteSshTunnelManager {
 
   reapIdle() {
     const cutoff = this.now() - this.idleMs;
+    let changed = false;
     for (const [key, entry] of this.tunnels) {
       if (entry.ready && entry.lastUsedAt < cutoff) {
         this._killEntry(entry);
         this.tunnels.delete(key);
+        changed = true;
       }
     }
+    if (changed) this._persistState();
   }
 
   markFailed(remoteHost, remotePort = 17891) {
-    const host = sanitizeRemoteHost(remoteHost);
+    const parsed = parseSshTarget(remoteHost);
     const rPort = validateBridgePort(remotePort) || 17891;
-    if (!host) return;
-    const key = `${host.toLowerCase()}:${rPort}`;
+    if (!parsed) return;
+    const key = this._tunnelKey(parsed, rPort);
     const entry = this.tunnels.get(key);
     if (entry) {
       this._killEntry(entry);
       this.tunnels.delete(key);
+      this._persistState();
     }
     this._recordFailure(key);
   }
 
   async ensure(remoteHost, { remotePort = 17891, force = false } = {}) {
     if (this.disposed) return null;
-    const host = sanitizeRemoteHost(remoteHost);
+    const parsed = parseSshTarget(remoteHost);
     const rPort = validateBridgePort(remotePort) || 17891;
-    if (!host || host.startsWith('-')) return null;
-    const key = `${host.toLowerCase()}:${rPort}`;
+    if (!parsed) return null;
+    const key = this._tunnelKey(parsed, rPort);
 
     const existing = this.tunnels.get(key);
     if (existing && !existing.closed) {
@@ -719,9 +879,10 @@ export class RemoteSshTunnelManager {
       '-o', 'ConnectTimeout=6',
       '-o', 'ControlMaster=no',
       '-o', 'ControlPath=none',
+      ...(parsed.port ? ['-p', String(parsed.port)] : []),
       '-L', `127.0.0.1:${localPort}:127.0.0.1:${rPort}`,
       '--',
-      host,
+      parsed.target,
     ];
 
     let child;
@@ -735,22 +896,28 @@ export class RemoteSshTunnelManager {
       return null;
     }
 
+    const nowTs = this.now();
     const entry = {
       key,
-      host,
+      host: parsed.target,
+      sshPort: parsed.port,
       remotePort: rPort,
       endpoint,
       child,
       ready: false,
       closed: false,
-      lastUsedAt: this.now(),
+      createdAt: nowTs,
+      lastUsedAt: nowTs,
       pending: null,
     };
 
     const cleanup = () => {
       entry.closed = true;
       entry.ready = false;
-      if (this.tunnels.get(key) === entry) this.tunnels.delete(key);
+      if (this.tunnels.get(key) === entry) {
+        this.tunnels.delete(key);
+        this._persistState();
+      }
     };
     child.once?.('exit', cleanup);
     child.once?.('error', cleanup);
@@ -766,17 +933,20 @@ export class RemoteSshTunnelManager {
           entry.pending = null;
           entry.lastUsedAt = this.now();
           this._clearFailure(key);
+          this._persistState();
           return endpoint;
         }
         await new Promise(r => setTimeout(r, this.probeIntervalMs));
       }
       this._killEntry(entry);
       if (this.tunnels.get(key) === entry) this.tunnels.delete(key);
+      this._persistState();
       this._recordFailure(key);
       return null;
     })();
 
     this.tunnels.set(key, entry);
+    this._persistState();
     return entry.pending;
   }
 
@@ -786,5 +956,6 @@ export class RemoteSshTunnelManager {
     for (const entry of this.tunnels.values()) this._killEntry(entry);
     this.tunnels.clear();
     this.failures.clear();
+    this._persistState();
   }
 }

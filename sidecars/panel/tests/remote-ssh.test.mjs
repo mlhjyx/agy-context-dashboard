@@ -4,6 +4,7 @@ import { createRequire } from 'node:module';
 import { request } from 'node:http';
 import {
   sanitizeRemoteHost,
+  parseSshTarget,
   validateBridgePort,
   validateLoopbackEndpoint,
   resolveRemoteEndpoint,
@@ -376,4 +377,65 @@ test('RemoteSshTunnelManager manages ephemeral loopback SSH tunnels safely with 
 
   mgr.dispose();
   assert.equal(killed.length, 3);
+});
+
+test('parseSshTarget splits custom ports and IPv6 safely and RemoteSshTunnelManager passes -p and reaps orphans', async () => {
+  assert.deepEqual(parseSshTarget('SSH: dev@198.51.100.10:2222'), { target: 'dev@198.51.100.10', port: 2222 });
+  assert.deepEqual(parseSshTarget('dev-box.internal:2200'), { target: 'dev-box.internal', port: 2200 });
+  assert.deepEqual(parseSshTarget('dev@[2001:db8::1]:2222'), { target: 'dev@2001:db8::1', port: 2222 });
+  assert.deepEqual(parseSshTarget('[::1]:2222'), { target: '::1', port: 2222 });
+  assert.deepEqual(parseSshTarget('2001:db8::1'), { target: '2001:db8::1', port: null });
+  assert.equal(parseSshTarget('dev@host:0'), null);
+  assert.equal(parseSshTarget('dev@host:70000'), null);
+  assert.equal(parseSshTarget('-bad@host'), null);
+  assert.equal(parseSshTarget('dev@-bad'), null);
+
+  let persisted = [
+    { pid: 44001, host: 'dev@198.51.100.10', localPort: 51111, remotePort: 17891 },
+    { pid: 44002, host: 'dev@198.51.100.10', localPort: 51112, remotePort: 17891 },
+  ];
+  const reapedPids = [];
+  const spawned = [];
+  const mgr = new RemoteSshTunnelManager({
+    stateFile: '/virtual/remote-tunnels.json',
+    readStateFn: () => persisted,
+    writeStateFn: (_file, records) => { persisted = records; },
+    inspectPidFn: pid => pid === 44001
+      ? 'ssh -N -T -L 127.0.0.1:51111:127.0.0.1:17891 -- dev@198.51.100.10'
+      : '/usr/bin/python3 unrelated-app.py',
+    killPidFn: pid => { reapedPids.push(pid); return true; },
+    allocatePortFn: async () => 52001,
+    probeHealthFn: async () => true,
+    spawnFn: (bin, args) => {
+      const child = {
+        pid: 45001,
+        bin,
+        args,
+        listeners: {},
+        once(ev, fn) { this.listeners[ev] = fn; },
+        kill() { this.listeners.exit?.(); },
+        unref() {},
+      };
+      spawned.push(child);
+      return child;
+    },
+  });
+
+  // Only verified stale SSH tunnel PID is reaped; unrelated recycled PID is untouched
+  assert.deepEqual(reapedPids, [44001]);
+  assert.deepEqual(persisted, []);
+
+  // Custom :2222 splits cleanly into ['-p', '2222', ..., '--', 'dev@198.51.100.10']
+  const ep = await mgr.ensure('dev@198.51.100.10:2222', { remotePort: 17891 });
+  assert.equal(ep?.port, 52001);
+  const pIdx = spawned[0].args.indexOf('-p');
+  assert.ok(pIdx > 0);
+  assert.equal(spawned[0].args[pIdx + 1], '2222');
+  assert.equal(spawned[0].args.at(-1), 'dev@198.51.100.10');
+  assert.equal(persisted.length, 1);
+  assert.equal(persisted[0].pid, 45001);
+  assert.equal(persisted[0].localPort, 52001);
+
+  mgr.dispose();
+  assert.deepEqual(persisted, []);
 });

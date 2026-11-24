@@ -57,7 +57,35 @@ const preferences=new PreferencesStore();
 const updater=new AppUpdater({pluginDir:join(HERE,'..','..'),dataDir:paths.data});
 let liveComposerModel = null;
 const remoteBackoff = createUnreachableTracker();
-const remoteTunnels = new RemoteSshTunnelManager();
+const remoteTunnels = new RemoteSshTunnelManager({ stateFile: join(paths.data, 'remote-tunnels.json') });
+const remoteMetricsCache = new Map();
+const remoteMetricsInflight = new Map();
+const fetchCachedRemoteMetrics = async (transport, remoteHost, endpoint, input) => {
+  const bypass = input?.force === true || input?.quotaRefresh === true || input?.contextDetail === true || input?.usageSync === true || input?.usageOnly === true;
+  const cacheKey = `${transport}:${remoteHost.toLowerCase()}:${String(input?.conversationId || '').toLowerCase()}:${input?.usageScope || ''}`;
+  const now = Date.now();
+  if (!bypass) {
+    const cached = remoteMetricsCache.get(cacheKey);
+    if (cached && now < cached.expiresAt) return cached.res;
+    const inflight = remoteMetricsInflight.get(cacheKey);
+    if (inflight) return inflight;
+  }
+  const run = fetchRemoteMetrics(endpoint, input).then(res => {
+    if (res.ok && !input?.usageOnly) {
+      const isRunning = /RUNNING/i.test(String(res.data?.speed?.status || ''));
+      const ttl = isRunning ? 3500 : 6000;
+      remoteMetricsCache.set(cacheKey, { res, expiresAt: Date.now() + ttl });
+      if (remoteMetricsCache.size > 16) remoteMetricsCache.delete(remoteMetricsCache.keys().next().value);
+    } else if (!res.ok) {
+      remoteMetricsCache.delete(cacheKey);
+    }
+    return res;
+  }).finally(() => {
+    if (remoteMetricsInflight.get(cacheKey) === run) remoteMetricsInflight.delete(cacheKey);
+  });
+  if (!bypass) remoteMetricsInflight.set(cacheKey, run);
+  return run;
+};
 const rendererRpcCache = new Map();
 const rendererRpcInflight = new Map();
 const fetchThrottledRendererSpeed = async (cacheKey, input, orchestratorSettings) => {
@@ -119,7 +147,7 @@ const metrics = async input => {
     const settings = runtimeSettings();
     const resolved = resolveRemoteEndpoint(remoteHost, settings);
     if (resolved && (input?.force === true || !remoteBackoff.isCoolingDown(resolved.endpoint.origin))) {
-      const remoteRes = await fetchRemoteMetrics(resolved.endpoint, input);
+      const remoteRes = await fetchCachedRemoteMetrics('loopback-bridge', remoteHost, resolved.endpoint, input);
       if (remoteRes.ok) {
         remoteBackoff.markOk(resolved.endpoint.origin);
         let localBase = null;
@@ -145,7 +173,7 @@ const metrics = async input => {
       const rPort = validateBridgePort(settings.remoteBridgePort) || 17891;
       const tunnelEndpoint = await remoteTunnels.ensure(remoteHost, { remotePort: rPort, force: input?.force === true });
       if (tunnelEndpoint) {
-        const remoteRes = await fetchRemoteMetrics(tunnelEndpoint, input);
+        const remoteRes = await fetchCachedRemoteMetrics('ssh-auto-tunnel', remoteHost, tunnelEndpoint, input);
         if (remoteRes.ok) {
           let localBase = null;
           if (!Array.isArray(remoteRes.data?.groups) || !remoteRes.data.groups.length) {
