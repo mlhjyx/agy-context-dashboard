@@ -144,7 +144,7 @@ const metrics = async input => {
       }
       remoteBackoff.markFailed(resolved.endpoint.origin);
     }
-    if (typeof input?.fetchRemoteTrajectory === 'function' && input?.conversationId) {
+    if (settings.remoteRendererRpc === true && typeof input?.fetchRemoteTrajectory === 'function' && input?.conversationId) {
       const rpcKey = `${remoteHost.toLowerCase()}:${input.conversationId.toLowerCase()}`;
       const speed = await fetchThrottledRendererSpeed(rpcKey, input, orchestratorSettings);
       if (speed) {
