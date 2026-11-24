@@ -14,6 +14,7 @@ import {
   createUnreachableTracker,
   buildRendererTrajectoryProbe,
   normalizeRendererTrajectory,
+  RemoteSshTunnelManager,
 } from '../../../compat/remote-ssh.mjs';
 import { validatedInput } from '../../../compat/runtime-ui.mjs';
 import { trajectoryMetrics } from '../metrics.mjs';
@@ -305,4 +306,74 @@ test('buildRendererTrajectoryProbe and normalizeRendererTrajectory feed trajecto
   });
   assert.equal(comp.source, 'host-token-groups');
   assert.equal(comp.hostGroups.length, 3);
+});
+
+test('RemoteSshTunnelManager manages ephemeral loopback SSH tunnels safely with idle reap and backoff', async () => {
+  let clock = 1000;
+  let nextPort = 41000;
+  const spawned = [];
+  const killed = [];
+  let healthReady = true;
+
+  const mgr = new RemoteSshTunnelManager({
+    now: () => clock,
+    idleMs: 10000,
+    readyTimeoutMs: 200,
+    probeIntervalMs: 10,
+    baseCooldownMs: 15000,
+    allocatePortFn: async () => ++nextPort,
+    probeHealthFn: async () => healthReady,
+    spawnFn: (bin, args) => {
+      const child = {
+        bin,
+        args,
+        listeners: {},
+        once(ev, fn) { this.listeners[ev] = fn; },
+        kill(sig) { killed.push({ args, sig }); this.listeners.exit?.(); },
+        unref() {},
+      };
+      spawned.push(child);
+      return child;
+    },
+  });
+
+  // Reject option-like remoteHost
+  assert.equal(await mgr.ensure('-oProxyCommand=evil'), null);
+  assert.equal(spawned.length, 0);
+
+  // Establish tunnel with strict isolation flags
+  const ep = await mgr.ensure('SSH: dev@198.51.100.10', { remotePort: 17891 });
+  assert.equal(ep?.port, 41001);
+  assert.equal(spawned.length, 1);
+  assert.ok(spawned[0].args.includes('ExitOnForwardFailure=no'));
+  assert.ok(spawned[0].args.includes('BatchMode=yes'));
+  assert.ok(spawned[0].args.includes('127.0.0.1:41001:127.0.0.1:17891'));
+  assert.equal(spawned[0].args.at(-2), '--');
+  assert.equal(spawned[0].args.at(-1), 'dev@198.51.100.10');
+
+  // Reuses existing ready tunnel without spawning a second process
+  const ep2 = await mgr.ensure('dev@198.51.100.10', { remotePort: 17891 });
+  assert.equal(ep2?.port, 41001);
+  assert.equal(spawned.length, 1);
+
+  // Idle reaper closes unused tunnel
+  clock += 20000;
+  mgr.reapIdle();
+  assert.equal(killed.length, 1);
+
+  // Failed probe backs off and respects cooldown until force=true
+  healthReady = false;
+  const failed = await mgr.ensure('dev@198.51.100.10', { remotePort: 17891 });
+  assert.equal(failed, null);
+  assert.equal(spawned.length, 2);
+  assert.equal(await mgr.ensure('dev@198.51.100.10', { remotePort: 17891 }), null);
+  assert.equal(spawned.length, 2, 'cooldown should prevent immediate respawn');
+
+  healthReady = true;
+  const forced = await mgr.ensure('dev@198.51.100.10', { remotePort: 17891, force: true });
+  assert.equal(forced?.port, 41003);
+  assert.equal(spawned.length, 3);
+
+  mgr.dispose();
+  assert.equal(killed.length, 3);
 });

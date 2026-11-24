@@ -1,4 +1,6 @@
 import { createServer, request } from 'node:http';
+import { createServer as createNetServer } from 'node:net';
+import { spawn } from 'node:child_process';
 
 const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost']);
 const HOST_CHARS = /^[A-Za-z0-9._:@\[\]-]+$/;
@@ -542,4 +544,247 @@ export function startRemoteBridgeServer({ port, metrics, health = null, onError 
   server.listen(validPort, '127.0.0.1');
   server.unref?.();
   return server;
+}
+
+export function allocateLoopbackPort() {
+  return new Promise((resolve, reject) => {
+    const srv = createNetServer();
+    srv.unref?.();
+    srv.once('error', reject);
+    srv.listen(0, '127.0.0.1', () => {
+      const addr = srv.address();
+      const port = typeof addr === 'object' && addr ? addr.port : 0;
+      srv.close(err => {
+        if (err || !port) reject(err || new Error('Failed to allocate loopback port'));
+        else resolve(port);
+      });
+    });
+  });
+}
+
+export function probeBridgeHealth(port, { timeoutMs = 450, requestFn = request } = {}) {
+  const valid = validateLoopbackEndpoint(port);
+  if (!valid) return Promise.resolve(false);
+  return new Promise(resolve => {
+    let settled = false;
+    const finish = ok => {
+      if (settled) return;
+      settled = true;
+      resolve(ok);
+    };
+    const req = requestFn(
+      {
+        hostname: '127.0.0.1',
+        port: valid.port,
+        path: '/api/health',
+        method: 'GET',
+        headers: { Host: `127.0.0.1:${valid.port}`, Accept: 'application/json' },
+      },
+      res => {
+        let body = '';
+        res.setEncoding('utf8');
+        res.on('data', chunk => {
+          if (body.length < 4096) body += chunk;
+        });
+        res.on('end', () => {
+          if (res.statusCode !== 200) return finish(false);
+          try {
+            const parsed = JSON.parse(body);
+            finish(parsed?.ok === true);
+          } catch {
+            finish(false);
+          }
+        });
+        res.on('error', () => finish(false));
+      },
+    );
+    req.on('error', () => finish(false));
+    req.setTimeout(timeoutMs, () => {
+      req.destroy();
+      finish(false);
+    });
+    req.end();
+  });
+}
+
+export class RemoteSshTunnelManager {
+  constructor({
+    sshBin = process.env.ANTIGRAVITY_SSH_BIN || 'ssh',
+    spawnFn = spawn,
+    allocatePortFn = allocateLoopbackPort,
+    probeHealthFn = probeBridgeHealth,
+    now = Date.now,
+    idleMs = 120000,
+    readyTimeoutMs = 4000,
+    probeIntervalMs = 150,
+    baseCooldownMs = 15000,
+    maxCooldownMs = 120000,
+  } = {}) {
+    this.sshBin = sshBin;
+    this.spawnFn = spawnFn;
+    this.allocatePortFn = allocatePortFn;
+    this.probeHealthFn = probeHealthFn;
+    this.now = now;
+    this.idleMs = idleMs;
+    this.readyTimeoutMs = readyTimeoutMs;
+    this.probeIntervalMs = probeIntervalMs;
+    this.baseCooldownMs = baseCooldownMs;
+    this.maxCooldownMs = maxCooldownMs;
+    this.tunnels = new Map();
+    this.failures = new Map();
+    this.disposed = false;
+    this.reaper = setInterval(() => this.reapIdle(), Math.min(30000, Math.max(5000, Math.floor(idleMs / 2))));
+    this.reaper.unref?.();
+  }
+
+  _killEntry(entry) {
+    if (!entry) return;
+    entry.closed = true;
+    try {
+      entry.child?.kill?.('SIGTERM');
+    } catch {}
+  }
+
+  _recordFailure(key) {
+    const prev = this.failures.get(key) || { count: 0, until: 0 };
+    const count = Math.min(prev.count + 1, 6);
+    const delay = Math.min(this.maxCooldownMs, this.baseCooldownMs * 2 ** (count - 1));
+    this.failures.set(key, { count, until: this.now() + delay });
+  }
+
+  _clearFailure(key) {
+    this.failures.delete(key);
+  }
+
+  reapIdle() {
+    const cutoff = this.now() - this.idleMs;
+    for (const [key, entry] of this.tunnels) {
+      if (entry.ready && entry.lastUsedAt < cutoff) {
+        this._killEntry(entry);
+        this.tunnels.delete(key);
+      }
+    }
+  }
+
+  markFailed(remoteHost, remotePort = 17891) {
+    const host = sanitizeRemoteHost(remoteHost);
+    const rPort = validateBridgePort(remotePort) || 17891;
+    if (!host) return;
+    const key = `${host.toLowerCase()}:${rPort}`;
+    const entry = this.tunnels.get(key);
+    if (entry) {
+      this._killEntry(entry);
+      this.tunnels.delete(key);
+    }
+    this._recordFailure(key);
+  }
+
+  async ensure(remoteHost, { remotePort = 17891, force = false } = {}) {
+    if (this.disposed) return null;
+    const host = sanitizeRemoteHost(remoteHost);
+    const rPort = validateBridgePort(remotePort) || 17891;
+    if (!host || host.startsWith('-')) return null;
+    const key = `${host.toLowerCase()}:${rPort}`;
+
+    const existing = this.tunnels.get(key);
+    if (existing && !existing.closed) {
+      existing.lastUsedAt = this.now();
+      if (existing.ready) return existing.endpoint;
+      if (existing.pending) return existing.pending;
+    }
+
+    const fail = this.failures.get(key);
+    if (!force && fail && this.now() < fail.until) return null;
+
+    let localPort;
+    try {
+      localPort = await this.allocatePortFn();
+    } catch {
+      this._recordFailure(key);
+      return null;
+    }
+    const endpoint = validateLoopbackEndpoint(localPort);
+    if (!endpoint) {
+      this._recordFailure(key);
+      return null;
+    }
+
+    const args = [
+      '-N',
+      '-T',
+      '-o', 'BatchMode=yes',
+      '-o', 'ExitOnForwardFailure=no',
+      '-o', 'ServerAliveInterval=15',
+      '-o', 'ServerAliveCountMax=3',
+      '-o', 'ConnectTimeout=6',
+      '-o', 'ControlMaster=no',
+      '-o', 'ControlPath=none',
+      '-L', `127.0.0.1:${localPort}:127.0.0.1:${rPort}`,
+      '--',
+      host,
+    ];
+
+    let child;
+    try {
+      child = this.spawnFn(this.sshBin, args, {
+        stdio: 'ignore',
+        windowsHide: true,
+      });
+    } catch {
+      this._recordFailure(key);
+      return null;
+    }
+
+    const entry = {
+      key,
+      host,
+      remotePort: rPort,
+      endpoint,
+      child,
+      ready: false,
+      closed: false,
+      lastUsedAt: this.now(),
+      pending: null,
+    };
+
+    const cleanup = () => {
+      entry.closed = true;
+      entry.ready = false;
+      if (this.tunnels.get(key) === entry) this.tunnels.delete(key);
+    };
+    child.once?.('exit', cleanup);
+    child.once?.('error', cleanup);
+    child.unref?.();
+
+    entry.pending = (async () => {
+      const deadline = this.now() + this.readyTimeoutMs;
+      const maxAttempts = Math.max(1, Math.ceil(this.readyTimeoutMs / Math.max(10, this.probeIntervalMs)) + 1);
+      for (let attempt = 0; attempt < maxAttempts && !this.disposed && !entry.closed && this.now() < deadline; attempt++) {
+        const ok = await this.probeHealthFn(localPort).catch(() => false);
+        if (ok && !this.disposed && !entry.closed) {
+          entry.ready = true;
+          entry.pending = null;
+          entry.lastUsedAt = this.now();
+          this._clearFailure(key);
+          return endpoint;
+        }
+        await new Promise(r => setTimeout(r, this.probeIntervalMs));
+      }
+      this._killEntry(entry);
+      if (this.tunnels.get(key) === entry) this.tunnels.delete(key);
+      this._recordFailure(key);
+      return null;
+    })();
+
+    this.tunnels.set(key, entry);
+    return entry.pending;
+  }
+
+  dispose() {
+    this.disposed = true;
+    clearInterval(this.reaper);
+    for (const entry of this.tunnels.values()) this._killEntry(entry);
+    this.tunnels.clear();
+    this.failures.clear();
+  }
 }

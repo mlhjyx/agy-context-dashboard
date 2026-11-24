@@ -1435,7 +1435,8 @@ module.exports = function installAgPulseInlineWidget() {
       usageDashboard=window.__agPulseUsageFactory({root,language,setMarkup,hostLabel:surface?.usageHostLabel||'Antigravity',guideDismissed:usageGuideDismissed,onDismissGuide:async()=>{const saved=await window.agPulseHost.setPreferences({usageGuideDismissed:true});if(saved?.usageGuideDismissed!==true)throw Error('Usage guide could not be saved');syncGuide(saved);},onLanguage:next=>preferences.choose(next),onRefresh:()=>refreshManually(true),onScope:async next=>{
         const ticket=++scopeRequestEpoch,save=usageScope.choose(next);
         try{
-          const result=await window.agPulseHost.getMetrics({conversationId:null,force:false,usageOnly:true,usageScope:next});
+          const remoteHost=detectRemoteHost();
+          const result=await window.agPulseHost.getMetrics({conversationId:null,force:false,usageOnly:true,usageScope:next,...(remoteHost?{remoteHost}:{})});
           if(!disposed&&!instDisposed&&ticket===scopeRequestEpoch&&result?.usage){
             if(data)data={...data,usage:result.usage};
             text('usage-today',compact(result.usage.todayTokens));text('usage-today-unit',tokUnit(result.usage.todayTokens));

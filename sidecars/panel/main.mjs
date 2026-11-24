@@ -30,6 +30,7 @@ import {
   startRemoteBridgeServer,
   createUnreachableTracker,
   normalizeRendererTrajectory,
+  RemoteSshTunnelManager,
 } from '../../compat/remote-ssh.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -56,6 +57,7 @@ const preferences=new PreferencesStore();
 const updater=new AppUpdater({pluginDir:join(HERE,'..','..'),dataDir:paths.data});
 let liveComposerModel = null;
 const remoteBackoff = createUnreachableTracker();
+const remoteTunnels = new RemoteSshTunnelManager();
 const rendererRpcCache = new Map();
 const rendererRpcInflight = new Map();
 const fetchThrottledRendererSpeed = async (cacheKey, input, orchestratorSettings) => {
@@ -112,11 +114,6 @@ const metrics = async input => {
   const liveTheme=integration.rendererTheme;
   const theme=(liveTheme?.fontFamily||liveTheme?.monoFontFamily)?{...liveTheme,...hostTheme}:hostTheme;
   const update = typeof updater?.passiveSummary==='function' ? updater.passiveSummary() : { available: false, latestVersion: null };
-  if(input?.usageOnly===true){
-    if(!store.serverPid&&!store.identity){try{await store.snapshot({conversationId:null,force:false,selectLatest:false,orchestratorSettings});}catch{}}
-    const requestedScope=(input.usageScope==='local'||input.usageScope==='account')?input.usageScope:(prefs?.usageScope||'local');
-    return {connection:store.quota?'live':'stale',groups:store.quota||[],speed:null,usage:await usage.snapshot({sync:false,scope:requestedScope,groups:store.quota}),preferences:prefs,theme,orchestratorSettings,integration:integration.health,update};
-  }
   const remoteHost = sanitizeRemoteHost(input?.remoteHost);
   if (remoteHost) {
     const settings = runtimeSettings();
@@ -144,7 +141,33 @@ const metrics = async input => {
       }
       remoteBackoff.markFailed(resolved.endpoint.origin);
     }
-    if (settings.remoteRendererRpc === true && typeof input?.fetchRemoteTrajectory === 'function' && input?.conversationId) {
+    if (!resolved && settings.autoSshTunnel !== false) {
+      const rPort = validateBridgePort(settings.remoteBridgePort) || 17891;
+      const tunnelEndpoint = await remoteTunnels.ensure(remoteHost, { remotePort: rPort, force: input?.force === true });
+      if (tunnelEndpoint) {
+        const remoteRes = await fetchRemoteMetrics(tunnelEndpoint, input);
+        if (remoteRes.ok) {
+          let localBase = null;
+          if (!Array.isArray(remoteRes.data?.groups) || !remoteRes.data.groups.length) {
+            localBase = await store.snapshot({ conversationId: null, force: false, selectLatest: false, orchestratorSettings }).catch(() => null);
+          }
+          return mergeRemoteMetrics({
+            remoteData: remoteRes.data,
+            localBase,
+            remoteHost,
+            liveComposerModel,
+            transport: 'ssh-auto-tunnel',
+            preferences: prefs,
+            theme,
+            orchestratorSettings,
+            integration: integration.health,
+            update,
+          });
+        }
+        remoteTunnels.markFailed(remoteHost, rPort);
+      }
+    }
+    if (settings.remoteRendererRpc === true && input?.usageOnly !== true && typeof input?.fetchRemoteTrajectory === 'function' && input?.conversationId) {
       const rpcKey = `${remoteHost.toLowerCase()}:${input.conversationId.toLowerCase()}`;
       const speed = await fetchThrottledRendererSpeed(rpcKey, input, orchestratorSettings);
       if (speed) {
@@ -174,6 +197,11 @@ const metrics = async input => {
       integration: integration.health,
       update,
     });
+  }
+  if(input?.usageOnly===true){
+    if(!store.serverPid&&!store.identity){try{await store.snapshot({conversationId:null,force:false,selectLatest:false,orchestratorSettings});}catch{}}
+    const requestedScope=(input.usageScope==='local'||input.usageScope==='account')?input.usageScope:(prefs?.usageScope||'local');
+    return {connection:store.quota?'live':'stale',groups:store.quota||[],speed:null,usage:await usage.snapshot({sync:false,scope:requestedScope,groups:store.quota}),preferences:prefs,theme,orchestratorSettings,integration:integration.health,update};
   }
   const base=await store.snapshot({...input,orchestratorSettings});if(input?.usageSync===true)void usage.sync(true);
   const requestedScope=(input?.usageScope==='local'||input?.usageScope==='account')?input.usageScope:(prefs?.usageScope||'local');
@@ -357,6 +385,7 @@ if (process.env.ANTIGRAVITY_SIDECAR_WEB_PORT) {
   const shutdown=async()=>{
     clearTimeout(passiveUpdateBoot);clearInterval(passiveUpdateTimer);
     try { remoteBridge?.close(); } catch {}
+    try { remoteTunnels.dispose(); } catch {}
     auditService.dispose();insightsScanner.dispose();usage.dispose();store.dispose();
     const exitTimer=setTimeout(()=>process.exit(0),2000);exitTimer.unref();
     await integration.stop();ownership.stop();process.exit(0);
