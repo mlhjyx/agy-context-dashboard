@@ -381,3 +381,27 @@ test('opening a swarm worker never absorbs coordinator or peers and preserves wo
  assert.equal(nested.taskUsage.roleBreakdown.worker.totalTokens,370);
  store.dispose();
 });
+
+test('settled unchanged children skip redundant RPCs and disk updates until settledChildRefreshMs elapses or summary changes',async t=>{
+ const summaries={
+  [child]:{stepCount:2,status:'CASCADE_RUN_STATUS_IDLE',lastModifiedTime:'2026-11-24T10:00:00Z'},
+ };
+ const fixture=collector(t,{summaries,options:{refreshMs:5000,settledChildRefreshMs:60000}});
+ const own=raw(parent,{children:[child]});
+ fixture.tracker.request(account,parent,own);await bounded(fixture.tracker.idle());
+ assert.equal(fixture.state.calls.length,1);
+ assert.equal(fixture.state.updates.length,1);
+
+ fixture.state.clock+=6000;
+ fixture.tracker.request(account,parent,own);await bounded(fixture.tracker.idle());
+ assert.equal(fixture.state.calls.length,1,'unchanged settled child should not be refetched every 5s');
+ assert.equal(fixture.state.updates.length,1,'unchanged result should not trigger redundant history save');
+
+ summaries[child]={stepCount:4,status:'CASCADE_RUN_STATUS_IDLE',lastModifiedTime:'2026-11-24T10:01:00Z'};
+ fixture.state.data.set(child,raw(child,{requests:2}));
+ fixture.state.clock+=6000;
+ fixture.tracker.request(account,parent,own);await bounded(fixture.tracker.idle());
+ assert.equal(fixture.state.calls.length,2);
+ assert.equal(fixture.state.updates.length,2);
+ assert.equal(fixture.result().tokens.totalTokens,unitTokens*3);
+});

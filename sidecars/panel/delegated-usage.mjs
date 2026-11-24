@@ -5,10 +5,12 @@ import {delegatedIds,isSwarmOwner,normalizeConversationId} from './delegation.mj
 import {taskRecords,mergeTaskRecords,aggregateTaskUsage,safeTaskUsage} from './task-usage.mjs';
 import {readSwarmMembers,agentDescriptor} from './swarm.mjs';
 
+const settledChildStatus = s => /IDLE|DONE|COMPLETED|CANCELLED|CANCELED|STOPPED|FAILED|ERROR/.test(String(s || ''));
+
 export class DelegatedUsage {
   constructor(client,{onSource=async()=>{},onUpdate=async()=>{},owns=()=>true,now=Date.now,
-    budgetBytes=8*1024*1024,maxAgents=128,maxEntries=4,refreshMs=5000,brainRoot=null}={}) {
-    Object.assign(this,{client,onSource,onUpdate,owns,now,budgetBytes,maxAgents,maxEntries,refreshMs});
+    budgetBytes=8*1024*1024,maxAgents=128,maxEntries=4,refreshMs=5000,settledChildRefreshMs=60000,brainRoot=null}={}) {
+    Object.assign(this,{client,onSource,onUpdate,owns,now,budgetBytes,maxAgents,maxEntries,refreshMs,settledChildRefreshMs});
     this.brainRoot=typeof brainRoot==='string'&&brainRoot?brainRoot:null;
     // A Promise is truthy but is never proof of ownership. Callers must supply
     // the synchronous cached predicate, not the asynchronous marker verifier.
@@ -61,7 +63,7 @@ export class DelegatedUsage {
     if(!ids.length&&!task){this.probeSwarm(scope,id,raw,saved,isCurrent);return safeTaskUsage(saved);}
     if(!task){
       while(this.tasks.size>=this.maxEntries){const oldest=this.tasks.keys().next().value;this.bytes-=this.tasks.get(oldest).bytes;this.tasks.delete(oldest);}
-      task={id,scope,children:new Set(),sources:new Map(),failures:new Map(),staleSources:new Set(),attempted:new Map(),order:0,bytes:0,lastAt:-Infinity,requested:false,force:false,result:safeTaskUsage(saved),truncated:false,swarmMembers:activeSwarm};
+      task={id,scope,children:new Set(),sources:new Map(),childMarks:new Map(),failures:new Map(),staleSources:new Set(),attempted:new Map(),order:0,bytes:0,lastAt:-Infinity,requested:false,force:false,result:safeTaskUsage(saved),truncated:false,swarmMembers:activeSwarm};
       this.tasks.set(id,task);
     }else if(swarmMembers)task.swarmMembers=swarmMembers;
     this.tasks.delete(id);this.tasks.set(id,task);
@@ -152,36 +154,60 @@ export class DelegatedUsage {
       }
       // Resume oldest/unread sources first after a bounded pass. Starting from
       // the same first child every time can starve late children in a large task.
+      const prevResult=task.result;
+      const hadCompletedPass=task.lastAt!==-Infinity;
+      let dirty=false;
       const queue=[...task.children].sort((a,b)=>(task.attempted.get(a)||0)-(task.attempted.get(b)||0)),queued=new Set(queue);
       for(const id of queue){
         if(!current())return;
         if(this.now()>deadline){failed=true;break;}
         const failure=task.failures.get(id);
         if(!force&&failure?.retryAt>this.now()){failed=true;continue;}
+        const summaries=this.client.reader?.summaries||{};
+        const summary=summaries[id]||Object.entries(summaries).find(([key])=>key.toLowerCase()===id)?.[1]||{};
+        const summaryMark=settledChildStatus(summary?.status)&&summary?.lastModifiedTime
+          ? JSON.stringify([summary.stepCount??null,summary.lastModifiedTime,summary.status,summary.lastUserInputStepIndex??null])
+          : null;
+        const prevMark=task.childMarks?.get(id);
+        if(!force&&summaryMark&&task.sources.has(id)&&!task.staleSources.has(id)&&!failure&&prevMark&&prevMark.mark===summaryMark&&this.now()-prevMark.checkedAt<this.settledChildRefreshMs){
+          continue;
+        }
         task.attempted.set(id,++task.order);
         try{
-          const summaries=this.client.reader?.summaries||{};
-          const summary=summaries[id]||Object.entries(summaries).find(([key])=>key.toLowerCase()===id)?.[1]||{};
           const raw=await this.client.trajectory(id,{summary,force,isCurrent:current});
           if(!current())return;
           if(!raw?.trajectory||!Array.isArray(raw.trajectory.generatorMetadata)||
             !raw.trajectory.generatorMetadata.length&&!raw.trajectory.steps?.length&&!Object.keys(summary).length)throw Error('Delegated statistics unavailable');
+          const stepsLen=raw.trajectory.steps?.length??0,gensLen=raw.trajectory.generatorMetadata.length;
+          const unchangedRef=!force&&prevMark&&prevMark.raw===raw&&prevMark.stepsLen===stepsLen&&prevMark.gensLen===gensLen&&task.sources.has(id)&&!task.staleSources.has(id);
+          if(unchangedRef){
+            prevMark.checkedAt=this.now();
+            if(summaryMark)prevMark.mark=summaryMark;
+            task.failures.delete(id);
+            await yieldLoop();
+            continue;
+          }
           this.addChildren(task,this.links(id,raw));
           for(const child of task.children)if(!queued.has(child)){queued.add(child);queue.push(child);}
-          if(!this.put(task,id,taskRecords(raw,id))){task.truncated=true;failed=true;break;}
+          if(!this.put(task,id,taskRecords(raw,id))){task.truncated=true;failed=true;dirty=true;break;}
           await this.onSource(task.scope,id,raw,{isCurrent:current,guardKey:task});
           if(!current())return;
+          dirty=true;
           task.failures.delete(id);
+          task.childMarks?.set(id,{mark:summaryMark,checkedAt:this.now(),raw,stepsLen,gensLen});
         }catch{
-          if(!current())return;failed=true;
+          if(!current())return;failed=true;dirty=true;
           const failures=(failure?.failures||0)+1;
           task.failures.set(id,{failures,retryAt:this.now()+Math.min(300000,5000*2**Math.min(failures-1,6))});
         }
         await yieldLoop();
       }
       if(!current())return;
-      task.lastAt=this.now();task.result=this.result(task,failed?'partial':'ready');
-      await this.onUpdate(task.scope,task.id,task.result,[...task.children]);
+      task.lastAt=this.now();
+      const nextResult=this.result(task,failed?'partial':'ready');
+      task.result=nextResult;
+      const resultChanged=!hadCompletedPass||dirty||nextResult?.state!==prevResult?.state||nextResult?.tokens?.totalTokens!==prevResult?.tokens?.totalTokens||nextResult?.loadedSubagents!==prevResult?.loadedSubagents||nextResult?.subagents!==prevResult?.subagents;
+      if(resultChanged)await this.onUpdate(task.scope,task.id,task.result,[...task.children]);
     }catch{if(current()){task.lastAt=this.now();task.result=this.result(task,'partial');}}
   }
   async idle(){while(this.running||this.swarmProbes.size){if(this.swarmProbes.size)await Promise.allSettled([...this.swarmProbes.values()]);if(this.running)await this.running;}}

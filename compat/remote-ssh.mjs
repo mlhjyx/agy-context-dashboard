@@ -1,7 +1,7 @@
 import { createServer, request } from 'node:http';
 import { createServer as createNetServer } from 'node:net';
-import { execFileSync, spawn } from 'node:child_process';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { execFile, execFileSync, spawn } from 'node:child_process';
+import { chmodSync, lstatSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 
 const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost']);
@@ -89,6 +89,15 @@ export function validateBridgePort(value) {
   const port = typeof value === 'number' ? value : typeof value === 'string' && /^\d+$/.test(value.trim()) ? Number(value.trim()) : NaN;
   if (!Number.isInteger(port) || port < 1024 || port > 65535) return null;
   return port;
+}
+
+export function validateBridgeSocketPath(value) {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  if (!trimmed || trimmed.length > 220) return null;
+  if (!/^\/[A-Za-z0-9._/@+-]+(?:\/[A-Za-z0-9._/@+-]+)*\.sock$/.test(trimmed)) return null;
+  if (trimmed.split('/').some(seg => seg === '..' || seg === '.')) return null;
+  return trimmed;
 }
 
 export function validateLoopbackEndpoint(raw) {
@@ -315,12 +324,14 @@ const RUN_STATUS_NAMES = {
   3: 'CASCADE_RUN_STATUS_CANCELLED',
 };
 
-export function buildRendererTrajectoryProbe(cascadeId) {
+export function buildRendererTrajectoryProbe(cascadeId, { paginatedOnly = false, timeBudgetMs = 180, maxPages = 12 } = {}) {
   const cid = typeof cascadeId === 'string' ? cascadeId.trim() : '';
   if (!GUID_RE.test(cid)) throw new Error('Invalid conversation ID');
-  return `(async (cid) => {
+  const safeBudget = Number.isFinite(timeBudgetMs) ? Math.max(40, Math.min(2000, Math.floor(timeBudgetMs))) : 180;
+  const safePages = Number.isFinite(maxPages) ? Math.max(1, Math.min(64, Math.floor(maxPages))) : 12;
+  return `(async (cid, opts) => {
     const g = typeof globalThis !== 'undefined' ? globalThis : window;
-    const isLs = v => Boolean(v && typeof v === 'object' && typeof v.getUserStatus === 'function' && typeof v.getCascadeTrajectory === 'function');
+    const isLs = v => Boolean(v && typeof v === 'object' && typeof v.getUserStatus === 'function' && (typeof v.getCascadeTrajectoryGeneratorMetadata === 'function' || typeof v.getCascadeTrajectory === 'function'));
     const findLs = () => {
       try {
         const ref = g.__agPulseRemoteLsRef;
@@ -350,10 +361,6 @@ export function buildRendererTrajectoryProbe(cascadeId) {
     };
     const ls = findLs();
     if (!ls) return null;
-    let res;
-    try { res = await ls.getCascadeTrajectory({ cascadeId: cid }); } catch { return null; }
-    const traj = res && res.trajectory;
-    if (!traj || typeof traj !== 'object') return null;
     const toIso = v => {
       if (v === undefined || v === null || v === '') return undefined;
       if (typeof v === 'string') return v;
@@ -398,7 +405,7 @@ export function buildRendererTrajectoryProbe(cascadeId) {
       source: typeof gr?.source === 'string' ? gr.source.slice(0, 48) : '',
       numTokens: Number(gr?.numTokens ?? gr?.tokens ?? 0),
     })) : undefined;
-    const steps = Array.isArray(traj.steps) ? traj.steps.map(s => {
+    const projectStep = s => {
       const m = s?.metadata || {};
       const pr = s?.plannerResponse;
       return {
@@ -421,8 +428,8 @@ export function buildRendererTrajectoryProbe(cascadeId) {
           },
         } : {}),
       };
-    }) : [];
-    const generatorMetadata = Array.isArray(traj.generatorMetadata) ? traj.generatorMetadata.map(gm => {
+    };
+    const projectGen = gm => {
       const cm = gm?.metadata?.case === 'chatModel' ? gm.metadata.value : (gm?.chatModel || gm?.metadata?.value);
       if (!cm || typeof cm !== 'object') return null;
       const cwm = cm.chatStartMetadata?.contextWindowMetadata;
@@ -458,8 +465,98 @@ export function buildRendererTrajectoryProbe(cascadeId) {
           } : {}),
         },
       };
-    }).filter(Boolean) : [];
+    };
+
+    const yieldTick = () => new Promise(r => setTimeout(r, 0));
+    const hasPaginatedMeta = typeof ls.getCascadeTrajectoryGeneratorMetadata === 'function';
+    const hasPaginatedSteps = typeof ls.getCascadeTrajectorySteps === 'function';
+    if (hasPaginatedMeta) {
+      const key = cid.toLowerCase();
+      if (!(g.__agPulseRemoteTrajCache instanceof Map)) g.__agPulseRemoteTrajCache = new Map();
+      const cacheMap = g.__agPulseRemoteTrajCache;
+      let entry = cacheMap.get(key);
+      if (!entry) {
+        entry = { steps: [], generatorMetadata: [], status: null };
+        cacheMap.set(key, entry);
+        while (cacheMap.size > 4) cacheMap.delete(cacheMap.keys().next().value);
+      } else {
+        cacheMap.delete(key);
+        cacheMap.set(key, entry);
+      }
+      const started = Date.now();
+      let pages = 0;
+      let partial = false;
+      let genOffset = Math.max(0, entry.generatorMetadata.length - 1);
+      const nextGens = entry.generatorMetadata.slice(0, genOffset);
+      while (pages < opts.maxPages) {
+        if (pages > 0 && Date.now() - started >= opts.timeBudgetMs) { partial = true; break; }
+        let page;
+        try {
+          page = await ls.getCascadeTrajectoryGeneratorMetadata({ cascadeId: cid, generatorMetadataOffset: genOffset, includeMessages: false });
+        } catch {
+          return null;
+        }
+        pages++;
+        const rawItems = Array.isArray(page?.generatorMetadata || page?.generatorMetadatas)
+          ? (page.generatorMetadata || page.generatorMetadatas)
+          : [];
+        if (!rawItems.length) break;
+        for (const item of rawItems) {
+          const projected = projectGen(item);
+          if (projected) nextGens.push(projected);
+        }
+        genOffset += rawItems.length;
+        if (Date.now() - started >= opts.timeBudgetMs) { partial = true; break; }
+        await yieldTick();
+      }
+      entry.generatorMetadata = nextGens;
+
+      if (hasPaginatedSteps && !partial) {
+        let stepOffset = Math.max(0, entry.steps.length - 8);
+        const nextSteps = entry.steps.slice(0, stepOffset);
+        while (pages < opts.maxPages) {
+          if (Date.now() - started >= opts.timeBudgetMs) { partial = true; break; }
+          let page;
+          try {
+            page = await ls.getCascadeTrajectorySteps({ cascadeId: cid, stepOffset, trajectoryVerbosity: 3 });
+          } catch {
+            break;
+          }
+          pages++;
+          const rawSteps = Array.isArray(page?.steps) ? page.steps : [];
+          if (!rawSteps.length) break;
+          for (const st of rawSteps) nextSteps.push(projectStep(st));
+          stepOffset += rawSteps.length;
+          if (Date.now() - started >= opts.timeBudgetMs) { partial = true; break; }
+          await yieldTick();
+        }
+        entry.steps = nextSteps;
+      }
+
+      if (!entry.generatorMetadata.length && !entry.steps.length) return null;
+      return {
+        paginated: true,
+        partial,
+        status: entry.status,
+        numTotalSteps: entry.steps.length,
+        numTotalGeneratorMetadata: entry.generatorMetadata.length,
+        trajectory: {
+          cascadeId: key,
+          steps: entry.steps,
+          generatorMetadata: entry.generatorMetadata,
+        },
+      };
+    }
+
+    if (opts.paginatedOnly || typeof ls.getCascadeTrajectory !== 'function') return null;
+    let res;
+    try { res = await ls.getCascadeTrajectory({ cascadeId: cid }); } catch { return null; }
+    const traj = res && res.trajectory;
+    if (!traj || typeof traj !== 'object') return null;
+    const steps = Array.isArray(traj.steps) ? traj.steps.map(projectStep) : [];
+    const generatorMetadata = Array.isArray(traj.generatorMetadata) ? traj.generatorMetadata.map(projectGen).filter(Boolean) : [];
     return {
+      paginated: false,
       status: res.status,
       numTotalSteps: Number(res.numTotalSteps ?? steps.length),
       numTotalGeneratorMetadata: Number(res.numTotalGeneratorMetadata ?? generatorMetadata.length),
@@ -469,7 +566,7 @@ export function buildRendererTrajectoryProbe(cascadeId) {
         generatorMetadata,
       },
     };
-  })(${JSON.stringify(cid)})`;
+  })(${JSON.stringify(cid)}, ${JSON.stringify({ paginatedOnly: Boolean(paginatedOnly), timeBudgetMs: safeBudget, maxPages: safePages })})`;
 }
 
 function normalizeProvider(rawProvider, meta = {}) {
@@ -529,10 +626,8 @@ export function normalizeRendererTrajectory(projected, cascadeId = null) {
   };
 }
 
-export function startRemoteBridgeServer({ port, metrics, health = null, onError = null } = {}) {
-  const validPort = validateBridgePort(port);
-  if (!validPort) return null;
-  const server = createServer(async (req, res) => {
+function createBridgeRequestHandler({ metrics, health = null, defaultHealth = { ok: true, mode: 'remote-bridge' } }) {
+  return async (req, res) => {
     const host = req.headers.host || '';
     if (!/^(127\.0\.0\.1|localhost)(:\d+)?$/i.test(host)) {
       res.writeHead(403);
@@ -554,7 +649,7 @@ export function startRemoteBridgeServer({ port, metrics, health = null, onError 
     res.setHeader('X-Content-Type-Options', 'nosniff');
 
     if (url.pathname === '/api/health') {
-      const payload = typeof health === 'function' ? await health() : { ok: true, mode: 'remote-bridge', port: validPort };
+      const payload = typeof health === 'function' ? await health() : defaultHealth;
       res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
       res.end(JSON.stringify(payload));
       return;
@@ -584,12 +679,61 @@ export function startRemoteBridgeServer({ port, metrics, health = null, onError 
     }
     res.writeHead(404);
     res.end();
-  });
+  };
+}
 
+export function startRemoteBridgeServer({ port, metrics, health = null, onError = null } = {}) {
+  const validPort = validateBridgePort(port);
+  if (!validPort) return null;
+  const server = createServer(createBridgeRequestHandler({
+    metrics,
+    health,
+    defaultHealth: { ok: true, mode: 'remote-bridge', port: validPort },
+  }));
   server.on('error', err => {
     if (typeof onError === 'function') onError(err);
   });
   server.listen(validPort, '127.0.0.1');
+  server.unref?.();
+  return server;
+}
+
+function unlinkIfSocket(socketPath) {
+  try {
+    const st = lstatSync(socketPath);
+    if (st.isSocket()) unlinkSync(socketPath);
+    else return false;
+  } catch (err) {
+    if (err?.code !== 'ENOENT') return false;
+  }
+  return true;
+}
+
+export function startRemoteUnixBridgeServer({ socketPath, metrics, health = null, onError = null } = {}) {
+  if (process.platform === 'win32') return null;
+  const validPath = validateBridgeSocketPath(socketPath);
+  if (!validPath) return null;
+  try {
+    mkdirSync(dirname(validPath), { recursive: true, mode: 0o700 });
+  } catch {}
+  if (!unlinkIfSocket(validPath)) return null;
+  const server = createServer(createBridgeRequestHandler({
+    metrics,
+    health,
+    defaultHealth: { ok: true, mode: 'remote-unix-bridge', socketPath: validPath },
+  }));
+  server.on('error', err => {
+    if (typeof onError === 'function') onError(err);
+  });
+  server.once('listening', () => {
+    try { chmodSync(validPath, 0o600); } catch {}
+  });
+  const origClose = server.close.bind(server);
+  server.close = cb => origClose(err => {
+    unlinkIfSocket(validPath);
+    if (typeof cb === 'function') cb(err);
+  });
+  server.listen(validPath);
   server.unref?.();
   return server;
 }
@@ -694,12 +838,36 @@ function defaultKillPid(pid) {
   }
 }
 
+function defaultProbeRemoteSocket(parsed, { sshBin = process.env.ANTIGRAVITY_SSH_BIN || 'ssh', timeoutMs = 2500 } = {}) {
+  if (process.platform === 'win32' || !parsed?.target) return Promise.resolve(null);
+  const args = [
+    '-T',
+    '-o', 'BatchMode=yes',
+    '-o', 'ConnectTimeout=4',
+    '-o', 'ControlMaster=no',
+    '-o', 'ControlPath=none',
+    ...(parsed.port ? ['-p', String(parsed.port)] : []),
+    '--',
+    parsed.target,
+    'sh -c \'for p in "${XDG_DATA_HOME:-$HOME/.local/share}/AntigravityPulse/bridge.sock" "$HOME/.gemini/antigravity/sidecar_data/antigravity-pulse/panel/data/bridge.sock"; do [ -S "$p" ] && printf "%s\\n" "$p" && break; done\'',
+  ];
+  return new Promise(resolve => {
+    execFile(sshBin, args, { encoding: 'utf8', timeout: timeoutMs, windowsHide: true }, (err, stdout) => {
+      if (err) return resolve(null);
+      const line = String(stdout || '').trim().split(/\r?\n/)[0] || '';
+      resolve(validateBridgeSocketPath(line));
+    });
+  });
+}
+
 export class RemoteSshTunnelManager {
   constructor({
     sshBin = process.env.ANTIGRAVITY_SSH_BIN || 'ssh',
     spawnFn = spawn,
     allocatePortFn = allocateLoopbackPort,
     probeHealthFn = probeBridgeHealth,
+    probeRemoteSocketFn = null,
+    preferUnixSocket = process.platform !== 'win32',
     stateFile = null,
     readStateFn = defaultReadTunnelState,
     writeStateFn = defaultWriteTunnelState,
@@ -716,6 +884,10 @@ export class RemoteSshTunnelManager {
     this.spawnFn = spawnFn;
     this.allocatePortFn = allocatePortFn;
     this.probeHealthFn = probeHealthFn;
+    this.probeRemoteSocketFn = typeof probeRemoteSocketFn === 'function'
+      ? probeRemoteSocketFn
+      : (parsed => defaultProbeRemoteSocket(parsed, { sshBin: this.sshBin }));
+    this.preferUnixSocket = Boolean(preferUnixSocket) && process.platform !== 'win32';
     this.stateFile = typeof stateFile === 'string' && stateFile ? stateFile : null;
     this.readStateFn = readStateFn;
     this.writeStateFn = writeStateFn;
@@ -728,7 +900,9 @@ export class RemoteSshTunnelManager {
     this.baseCooldownMs = baseCooldownMs;
     this.maxCooldownMs = maxCooldownMs;
     this.tunnels = new Map();
+    this.inFlight = new Map();
     this.failures = new Map();
+    this.socketCache = new Map();
     this.disposed = false;
     if (this.stateFile) this.reapOrphans();
     this.reaper = setInterval(() => this.reapIdle(), Math.min(30000, Math.max(5000, Math.floor(idleMs / 2))));
@@ -737,6 +911,10 @@ export class RemoteSshTunnelManager {
 
   _tunnelKey(parsed, rPort) {
     return `${parsed.target.toLowerCase()}${parsed.port ? `:${parsed.port}` : ''}/${rPort}`;
+  }
+
+  _hostKey(parsed) {
+    return `${parsed.target.toLowerCase()}${parsed.port ? `:${parsed.port}` : ''}`;
   }
 
   _persistState() {
@@ -750,6 +928,7 @@ export class RemoteSshTunnelManager {
           host: entry.host,
           localPort: entry.endpoint.port,
           remotePort: entry.remotePort,
+          forwardSpec: entry.forwardSpec,
           createdAt: entry.createdAt,
         });
       }
@@ -774,14 +953,16 @@ export class RemoteSshTunnelManager {
         const localPort = Number(item?.localPort);
         const remotePort = Number(item?.remotePort);
         if (!Number.isInteger(pid) || pid <= 1 || pid === process.pid) continue;
-        if (!Number.isInteger(localPort) || !Number.isInteger(remotePort)) continue;
+        const expectedForward = typeof item?.forwardSpec === 'string' && item.forwardSpec.startsWith('127.0.0.1:')
+          ? item.forwardSpec
+          : (Number.isInteger(localPort) && Number.isInteger(remotePort) ? `127.0.0.1:${localPort}:127.0.0.1:${remotePort}` : '');
+        if (!expectedForward) continue;
         let cmd = '';
         try {
           cmd = String(this.inspectPidFn(pid) || '');
         } catch {
           cmd = '';
         }
-        const expectedForward = `127.0.0.1:${localPort}:127.0.0.1:${remotePort}`;
         if (/\bssh\b/i.test(cmd) && cmd.includes(expectedForward)) {
           try {
             if (this.killPidFn(pid) !== false) reaped++;
@@ -830,6 +1011,7 @@ export class RemoteSshTunnelManager {
     const rPort = validateBridgePort(remotePort) || 17891;
     if (!parsed) return;
     const key = this._tunnelKey(parsed, rPort);
+    this.socketCache.delete(this._hostKey(parsed));
     const entry = this.tunnels.get(key);
     if (entry) {
       this._killEntry(entry);
@@ -839,35 +1021,33 @@ export class RemoteSshTunnelManager {
     this._recordFailure(key);
   }
 
-  async ensure(remoteHost, { remotePort = 17891, force = false } = {}) {
-    if (this.disposed) return null;
-    const parsed = parseSshTarget(remoteHost);
-    const rPort = validateBridgePort(remotePort) || 17891;
-    if (!parsed) return null;
-    const key = this._tunnelKey(parsed, rPort);
-
-    const existing = this.tunnels.get(key);
-    if (existing && !existing.closed) {
-      existing.lastUsedAt = this.now();
-      if (existing.ready) return existing.endpoint;
-      if (existing.pending) return existing.pending;
+  async _resolveRemoteSocket(parsed, force) {
+    if (!this.preferUnixSocket) return null;
+    const hKey = this._hostKey(parsed);
+    const cached = this.socketCache.get(hKey);
+    if (!force && cached && this.now() < cached.expiresAt) return cached.socketPath;
+    let found = null;
+    try {
+      const raw = await this.probeRemoteSocketFn(parsed);
+      found = validateBridgeSocketPath(raw);
+    } catch {
+      found = null;
     }
+    this.socketCache.set(hKey, { socketPath: found, expiresAt: this.now() + 60000 });
+    return found;
+  }
 
-    const fail = this.failures.get(key);
-    if (!force && fail && this.now() < fail.until) return null;
-
+  async _spawnAndProbe(key, parsed, rPort, forwardTarget, transport) {
     let localPort;
     try {
       localPort = await this.allocatePortFn();
     } catch {
-      this._recordFailure(key);
       return null;
     }
-    const endpoint = validateLoopbackEndpoint(localPort);
-    if (!endpoint) {
-      this._recordFailure(key);
-      return null;
-    }
+    const baseEndpoint = validateLoopbackEndpoint(localPort);
+    if (!baseEndpoint) return null;
+    const endpoint = { ...baseEndpoint, transport };
+    const forwardSpec = `127.0.0.1:${localPort}:${forwardTarget}`;
 
     const args = [
       '-N',
@@ -880,7 +1060,7 @@ export class RemoteSshTunnelManager {
       '-o', 'ControlMaster=no',
       '-o', 'ControlPath=none',
       ...(parsed.port ? ['-p', String(parsed.port)] : []),
-      '-L', `127.0.0.1:${localPort}:127.0.0.1:${rPort}`,
+      '-L', forwardSpec,
       '--',
       parsed.target,
     ];
@@ -892,7 +1072,6 @@ export class RemoteSshTunnelManager {
         windowsHide: true,
       });
     } catch {
-      this._recordFailure(key);
       return null;
     }
 
@@ -902,6 +1081,7 @@ export class RemoteSshTunnelManager {
       host: parsed.target,
       sshPort: parsed.port,
       remotePort: rPort,
+      forwardSpec,
       endpoint,
       child,
       ready: false,
@@ -923,31 +1103,66 @@ export class RemoteSshTunnelManager {
     child.once?.('error', cleanup);
     child.unref?.();
 
-    entry.pending = (async () => {
-      const deadline = this.now() + this.readyTimeoutMs;
-      const maxAttempts = Math.max(1, Math.ceil(this.readyTimeoutMs / Math.max(10, this.probeIntervalMs)) + 1);
-      for (let attempt = 0; attempt < maxAttempts && !this.disposed && !entry.closed && this.now() < deadline; attempt++) {
-        const ok = await this.probeHealthFn(localPort).catch(() => false);
-        if (ok && !this.disposed && !entry.closed) {
-          entry.ready = true;
-          entry.pending = null;
-          entry.lastUsedAt = this.now();
-          this._clearFailure(key);
-          this._persistState();
-          return endpoint;
-        }
-        await new Promise(r => setTimeout(r, this.probeIntervalMs));
-      }
-      this._killEntry(entry);
-      if (this.tunnels.get(key) === entry) this.tunnels.delete(key);
-      this._persistState();
-      this._recordFailure(key);
-      return null;
-    })();
-
     this.tunnels.set(key, entry);
     this._persistState();
-    return entry.pending;
+
+    const deadline = this.now() + this.readyTimeoutMs;
+    const maxAttempts = Math.max(1, Math.ceil(this.readyTimeoutMs / Math.max(10, this.probeIntervalMs)) + 1);
+    for (let attempt = 0; attempt < maxAttempts && !this.disposed && !entry.closed && this.now() < deadline; attempt++) {
+      const ok = await this.probeHealthFn(localPort).catch(() => false);
+      if (ok && !this.disposed && !entry.closed) {
+        entry.ready = true;
+        entry.lastUsedAt = this.now();
+        this._clearFailure(key);
+        this._persistState();
+        return endpoint;
+      }
+      await new Promise(r => setTimeout(r, this.probeIntervalMs));
+    }
+    this._killEntry(entry);
+    if (this.tunnels.get(key) === entry) this.tunnels.delete(key);
+    this._persistState();
+    return null;
+  }
+
+  async ensure(remoteHost, { remotePort = 17891, force = false, preferUnixSocket = this.preferUnixSocket } = {}) {
+    if (this.disposed) return null;
+    const parsed = parseSshTarget(remoteHost);
+    const rPort = validateBridgePort(remotePort) || 17891;
+    if (!parsed) return null;
+    const key = this._tunnelKey(parsed, rPort);
+
+    const existing = this.tunnels.get(key);
+    if (existing && !existing.closed && existing.ready) {
+      existing.lastUsedAt = this.now();
+      return existing.endpoint;
+    }
+    if (this.inFlight.has(key)) return this.inFlight.get(key);
+
+    const fail = this.failures.get(key);
+    if (!force && fail && this.now() < fail.until) return null;
+
+    const run = (async () => {
+      if (preferUnixSocket && this.preferUnixSocket) {
+        const remoteSocket = await this._resolveRemoteSocket(parsed, force);
+        if (remoteSocket && !this.disposed) {
+          const udsEndpoint = await this._spawnAndProbe(key, parsed, rPort, remoteSocket, 'ssh-auto-tunnel-uds');
+          if (udsEndpoint) return udsEndpoint;
+          // UDS forwarding may be disallowed by sshd; cache miss briefly and fall back to loopback TCP.
+          this.socketCache.set(this._hostKey(parsed), { socketPath: null, expiresAt: this.now() + 120000 });
+        }
+      }
+      if (this.disposed) return null;
+      const tcpEndpoint = await this._spawnAndProbe(key, parsed, rPort, `127.0.0.1:${rPort}`, 'ssh-auto-tunnel');
+      if (tcpEndpoint) return tcpEndpoint;
+      this._recordFailure(key);
+      return null;
+    })().finally(() => {
+      if (this.inFlight.get(key) === run) this.inFlight.delete(key);
+    });
+
+    this.inFlight.set(key, run);
+    return run;
   }
 
   dispose() {
@@ -955,7 +1170,9 @@ export class RemoteSshTunnelManager {
     clearInterval(this.reaper);
     for (const entry of this.tunnels.values()) this._killEntry(entry);
     this.tunnels.clear();
+    this.inFlight.clear();
     this.failures.clear();
+    this.socketCache.clear();
     this._persistState();
   }
 }

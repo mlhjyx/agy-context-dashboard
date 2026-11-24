@@ -6,12 +6,14 @@ import {
   sanitizeRemoteHost,
   parseSshTarget,
   validateBridgePort,
+  validateBridgeSocketPath,
   validateLoopbackEndpoint,
   resolveRemoteEndpoint,
   fetchRemoteMetrics,
   mergeRemoteMetrics,
   buildRemoteFallbackMetrics,
   startRemoteBridgeServer,
+  startRemoteUnixBridgeServer,
   createUnreachableTracker,
   buildRendererTrajectoryProbe,
   normalizeRendererTrajectory,
@@ -318,6 +320,7 @@ test('RemoteSshTunnelManager manages ephemeral loopback SSH tunnels safely with 
 
   const mgr = new RemoteSshTunnelManager({
     now: () => clock,
+    preferUnixSocket: false,
     idleMs: 10000,
     readyTimeoutMs: 200,
     probeIntervalMs: 10,
@@ -397,6 +400,7 @@ test('parseSshTarget splits custom ports and IPv6 safely and RemoteSshTunnelMana
   const reapedPids = [];
   const spawned = [];
   const mgr = new RemoteSshTunnelManager({
+    preferUnixSocket: false,
     stateFile: '/virtual/remote-tunnels.json',
     readStateFn: () => persisted,
     writeStateFn: (_file, records) => { persisted = records; },
@@ -438,4 +442,161 @@ test('parseSshTarget splits custom ports and IPv6 safely and RemoteSshTunnelMana
 
   mgr.dispose();
   assert.deepEqual(persisted, []);
+});
+
+test('startRemoteUnixBridgeServer serves 0600 Unix socket and cleans up on close', async t => {
+  if (process.platform === 'win32') return;
+  const { mkdtemp, rm, stat } = await import('node:fs/promises');
+  const { existsSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+
+  assert.equal(validateBridgeSocketPath('/home/dev/.local/share/AntigravityPulse/bridge.sock'), '/home/dev/.local/share/AntigravityPulse/bridge.sock');
+  assert.equal(validateBridgeSocketPath('/tmp/../etc/bridge.sock'), null);
+  assert.equal(validateBridgeSocketPath('relative/bridge.sock'), null);
+  assert.equal(validateBridgeSocketPath('/tmp/bad space.sock'), null);
+  assert.equal(validateBridgeSocketPath('/tmp/not-a-sock.txt'), null);
+
+  const dir = await mkdtemp(join(tmpdir(), 'ag-uds-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const sockPath = join(dir, 'bridge.sock');
+
+  const server = startRemoteUnixBridgeServer({
+    socketPath: sockPath,
+    metrics: async input => ({ connection: 'live', speed: { conversationId: input.conversationId, rounds: 3 } }),
+  });
+  await new Promise(resolve => server.once('listening', resolve));
+  const mode = (await stat(sockPath)).mode & 0o777;
+  assert.equal(mode, 0o600);
+
+  const healthBody = await new Promise((resolve, reject) => {
+    const req = request({ socketPath: sockPath, path: '/api/health', headers: { Host: '127.0.0.1:17891' } }, res => {
+      let body = '';
+      res.setEncoding('utf8');
+      res.on('data', c => { body += c; });
+      res.on('end', () => resolve({ status: res.statusCode, json: JSON.parse(body) }));
+    });
+    req.on('error', reject);
+    req.end();
+  });
+  assert.equal(healthBody.status, 200);
+  assert.equal(healthBody.json.ok, true);
+
+  const badHost = await new Promise((resolve, reject) => {
+    const req = request({ socketPath: sockPath, path: '/api/health', headers: { Host: 'evil.example' } }, res => {
+      res.resume();
+      resolve(res.statusCode);
+    });
+    req.on('error', reject);
+    req.end();
+  });
+  assert.equal(badHost, 403);
+
+  await new Promise(resolve => server.close(resolve));
+  assert.equal(existsSync(sockPath), false);
+});
+
+test('RemoteSshTunnelManager prefers remote UDS tunnel and seamlessly falls back to TCP when UDS fails', async () => {
+  if (process.platform === 'win32') return;
+  let nextPort = 53000;
+  const spawned = [];
+  let allowUdsHealth = true;
+  const mgr = new RemoteSshTunnelManager({
+    preferUnixSocket: true,
+    readyTimeoutMs: 120,
+    probeIntervalMs: 10,
+    probeRemoteSocketFn: async () => '/home/dev/.local/share/AntigravityPulse/bridge.sock',
+    allocatePortFn: async () => ++nextPort,
+    probeHealthFn: async port => {
+      const last = spawned.find(s => s.args.some(a => a.includes(`127.0.0.1:${port}:`)));
+      const isUds = Boolean(last?.args.some(a => a.endsWith('.sock')));
+      return isUds ? allowUdsHealth : true;
+    },
+    spawnFn: (bin, args) => {
+      const child = {
+        pid: 46000 + spawned.length,
+        bin,
+        args,
+        listeners: {},
+        once(ev, fn) { this.listeners[ev] = fn; },
+        kill() { this.listeners.exit?.(); },
+        unref() {},
+      };
+      spawned.push(child);
+      return child;
+    },
+  });
+
+  const epUds = await mgr.ensure('dev@198.51.100.10', { remotePort: 17891 });
+  assert.equal(epUds?.transport, 'ssh-auto-tunnel-uds');
+  assert.ok(spawned[0].args.includes('127.0.0.1:53001:/home/dev/.local/share/AntigravityPulse/bridge.sock'));
+
+  // Simulate UDS forwarding disallowed by sshd -> automatic fallback to TCP on same call
+  mgr.markFailed('dev@198.51.100.10', 17891);
+  allowUdsHealth = false;
+  const epTcp = await mgr.ensure('dev@198.51.100.10', { remotePort: 17891, force: true });
+  assert.equal(epTcp?.transport, 'ssh-auto-tunnel');
+  assert.ok(spawned.at(-1).args.includes('127.0.0.1:53003:127.0.0.1:17891'));
+  mgr.dispose();
+});
+
+test('buildRendererTrajectoryProbe fetches incremental paginated metadata without calling monolithic getCascadeTrajectory', async () => {
+  const vm = await import('node:vm');
+  const cid = '1e8fa1e7-789e-4e17-b6dd-4ed830009334';
+  const calls = [];
+  const gens = [
+    { stepIndices: [1], chatModel: { responseModel: 'gemini-4-neon', streamingDuration: { seconds: 1, nanos: 0 }, usage: { inputTokens: '1000', outputTokens: '100', cacheReadTokens: '800', apiProvider: 24, responseId: 'r1' } } },
+    { stepIndices: [3], chatModel: { responseModel: 'gemini-4-neon', streamingDuration: { seconds: 1, nanos: 0 }, usage: { inputTokens: '2000', outputTokens: '150', cacheReadTokens: '1600', apiProvider: 24, responseId: 'r2' } } },
+  ];
+  const steps = [
+    { type: 14, status: 3, metadata: { createdAt: '2026-11-24T16:19:38.000Z' } },
+    { type: 15, status: 3, metadata: { createdAt: '2026-11-24T16:19:38.100Z', completedAt: '2026-11-24T16:19:39.100Z' }, plannerResponse: { response: 'hi' } },
+    { type: 14, status: 3, metadata: { createdAt: '2026-11-24T16:20:00.000Z' } },
+    { type: 15, status: 3, metadata: { createdAt: '2026-11-24T16:20:00.100Z', completedAt: '2026-11-24T16:20:01.100Z' }, plannerResponse: { response: 'ok' } },
+  ];
+  const ls = {
+    getUserStatus: async () => ({}),
+    getCascadeTrajectory: async () => { throw new Error('must never call monolithic getCascadeTrajectory when paginated exists'); },
+    getCascadeTrajectoryGeneratorMetadata: async req => {
+      calls.push(['meta', req.generatorMetadataOffset, req.includeMessages]);
+      return { generatorMetadata: gens.slice(req.generatorMetadataOffset, req.generatorMetadataOffset + 1) };
+    },
+    getCascadeTrajectorySteps: async req => {
+      calls.push(['steps', req.stepOffset]);
+      return { steps: steps.slice(req.stepOffset, req.stepOffset + 2) };
+    },
+  };
+  const sandbox = {
+    window: {},
+    document: { getElementById: () => null, body: null },
+    setTimeout,
+    Date,
+    WeakRef,
+  };
+  sandbox.globalThis = sandbox;
+  sandbox.__agPulseRemoteLsRef = ls;
+  const ctx = vm.createContext(sandbox);
+
+  const first = await vm.runInContext(buildRendererTrajectoryProbe(cid, { paginatedOnly: true }), ctx);
+  assert.equal(first.paginated, true);
+  assert.equal(first.trajectory.generatorMetadata.length, 2);
+  assert.equal(first.trajectory.steps.length, 4);
+  assert.ok(calls.filter(c => c[0] === 'meta').every(c => c[2] === false));
+
+  // Second poll incrementally starts from offset = length - 1 (revalidating only the tail)
+  calls.length = 0;
+  gens.push({ stepIndices: [5], chatModel: { responseModel: 'gemini-4-neon', streamingDuration: { seconds: 1, nanos: 0 }, usage: { inputTokens: '3000', outputTokens: '200', cacheReadTokens: '2400', apiProvider: 24, responseId: 'r3' } } });
+  const second = await vm.runInContext(buildRendererTrajectoryProbe(cid, { paginatedOnly: true }), ctx);
+  assert.equal(second.trajectory.generatorMetadata.length, 3);
+  assert.equal(calls.find(c => c[0] === 'meta')[1], 1);
+
+  // When host lacks paginated RPC, paginatedOnly=true safely returns null instead of calling monolithic getCascadeTrajectory
+  const legacySandbox = { window: {}, document: { getElementById: () => null, body: null }, setTimeout, Date };
+  legacySandbox.globalThis = legacySandbox;
+  legacySandbox.__agPulseRemoteLsRef = {
+    getUserStatus: async () => ({}),
+    getCascadeTrajectory: async () => { throw new Error('blocked in paginatedOnly'); },
+  };
+  const legacyRes = await vm.runInContext(buildRendererTrajectoryProbe(cid, { paginatedOnly: true }), vm.createContext(legacySandbox));
+  assert.equal(legacyRes, null);
 });

@@ -298,7 +298,7 @@ export class RuntimeUi {
         if (await this.enabled()) {
           const metricsInput = validatedInput(input.input);
           if (metricsInput.remoteHost && metricsInput.conversationId) {
-            metricsInput.fetchRemoteTrajectory = cid => this.fetchRendererTrajectory(connection, cid, p.executionContextId);
+            metricsInput.fetchRemoteTrajectory = (cid, options) => this.fetchRendererTrajectory(connection, cid, p.executionContextId, options);
           }
           result = await this.snapshot(metricsInput);
         } else {
@@ -333,11 +333,11 @@ export class RuntimeUi {
     } finally { connection.inflight--; }
   }
   rendererGuard(expression){return this.owner?'if(window.__agPulseRuntimeOwner==='+JSON.stringify(this.owner)+'){'+expression+'}':expression;}
-  async fetchRendererTrajectory(connection, conversationId, contextId = undefined) {
+  async fetchRendererTrajectory(connection, conversationId, contextId = undefined, options = undefined) {
     if (!connection || connection.closed || connection.revoked || !conversationId) return null;
     try {
       const res = await connection.command('Runtime.evaluate', {
-        expression: buildRendererTrajectoryProbe(conversationId),
+        expression: buildRendererTrajectoryProbe(conversationId, options || {}),
         awaitPromise: true,
         returnByValue: true,
         ...(contextId === undefined ? {} : { contextId }),

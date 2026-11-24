@@ -27,7 +27,9 @@ import {
   mergeRemoteMetrics,
   buildRemoteFallbackMetrics,
   validateBridgePort,
+  validateBridgeSocketPath,
   startRemoteBridgeServer,
+  startRemoteUnixBridgeServer,
   createUnreachableTracker,
   normalizeRendererTrajectory,
   RemoteSshTunnelManager,
@@ -88,7 +90,7 @@ const fetchCachedRemoteMetrics = async (transport, remoteHost, endpoint, input) 
 };
 const rendererRpcCache = new Map();
 const rendererRpcInflight = new Map();
-const fetchThrottledRendererSpeed = async (cacheKey, input, orchestratorSettings) => {
+const fetchThrottledRendererSpeed = async (cacheKey, input, orchestratorSettings, { paginatedOnly = true } = {}) => {
   const now = Date.now();
   const cached = rendererRpcCache.get(cacheKey);
   if (input?.force !== true && cached && now < cached.nextAt) {
@@ -99,7 +101,7 @@ const fetchThrottledRendererSpeed = async (cacheKey, input, orchestratorSettings
   }
   const started = now;
   const task = (async () => {
-    const projected = await input.fetchRemoteTrajectory(input.conversationId).catch(() => null);
+    const projected = await input.fetchRemoteTrajectory(input.conversationId, { paginatedOnly }).catch(() => null);
     const elapsed = Date.now() - started;
     const normalized = normalizeRendererTrajectory(projected, input.conversationId);
     if (!normalized) {
@@ -118,7 +120,8 @@ const fetchThrottledRendererSpeed = async (cacheKey, input, orchestratorSettings
         if (comp) speed.contextComposition = comp;
       }
       speed.conversationId = input.conversationId.toLowerCase();
-      const ttl = Math.min(30000, Math.max(8000, elapsed * 12));
+      const baseTtl = projected?.paginated === true ? (projected.partial ? 2500 : 4500) : 8000;
+      const ttl = Math.min(30000, Math.max(baseTtl, elapsed * 10));
       rendererRpcCache.set(cacheKey, { speed, nextAt: Date.now() + ttl });
       if (rendererRpcCache.size > 16) rendererRpcCache.delete(rendererRpcCache.keys().next().value);
       return speed;
@@ -171,9 +174,14 @@ const metrics = async input => {
     }
     if (!resolved && settings.autoSshTunnel !== false) {
       const rPort = validateBridgePort(settings.remoteBridgePort) || 17891;
-      const tunnelEndpoint = await remoteTunnels.ensure(remoteHost, { remotePort: rPort, force: input?.force === true });
+      const tunnelEndpoint = await remoteTunnels.ensure(remoteHost, {
+        remotePort: rPort,
+        force: input?.force === true,
+        preferUnixSocket: settings.remoteBridgeSocket !== false,
+      });
       if (tunnelEndpoint) {
-        const remoteRes = await fetchCachedRemoteMetrics('ssh-auto-tunnel', remoteHost, tunnelEndpoint, input);
+        const tunnelTransport = tunnelEndpoint.transport || 'ssh-auto-tunnel';
+        const remoteRes = await fetchCachedRemoteMetrics(tunnelTransport, remoteHost, tunnelEndpoint, input);
         if (remoteRes.ok) {
           let localBase = null;
           if (!Array.isArray(remoteRes.data?.groups) || !remoteRes.data.groups.length) {
@@ -184,7 +192,7 @@ const metrics = async input => {
             localBase,
             remoteHost,
             liveComposerModel,
-            transport: 'ssh-auto-tunnel',
+            transport: tunnelTransport,
             preferences: prefs,
             theme,
             orchestratorSettings,
@@ -195,9 +203,11 @@ const metrics = async input => {
         remoteTunnels.markFailed(remoteHost, rPort);
       }
     }
-    if (settings.remoteRendererRpc === true && input?.usageOnly !== true && typeof input?.fetchRemoteTrajectory === 'function' && input?.conversationId) {
+    if (settings.remoteRendererRpc !== false && input?.usageOnly !== true && typeof input?.fetchRemoteTrajectory === 'function' && input?.conversationId) {
       const rpcKey = `${remoteHost.toLowerCase()}:${input.conversationId.toLowerCase()}`;
-      const speed = await fetchThrottledRendererSpeed(rpcKey, input, orchestratorSettings);
+      const speed = await fetchThrottledRendererSpeed(rpcKey, input, orchestratorSettings, {
+        paginatedOnly: settings.remoteRendererRpc !== true,
+      });
       if (speed) {
         const localBase = await store.snapshot({ conversationId: null, force: input?.force === true, quotaRefresh: input?.quotaRefresh === true, selectLatest: false, orchestratorSettings }).catch(() => null);
         return mergeRemoteMetrics({
@@ -205,7 +215,7 @@ const metrics = async input => {
           localBase,
           remoteHost,
           liveComposerModel,
-          transport: 'renderer-rpc',
+          transport: settings.remoteRendererRpc === true ? 'renderer-rpc' : 'renderer-rpc-paginated',
           preferences: prefs,
           theme,
           orchestratorSettings,
@@ -400,7 +410,8 @@ if (process.env.ANTIGRAVITY_SIDECAR_WEB_PORT) {
   },'POST');
   app.run();
   integration.start();
-  const bridgePort = validateBridgePort(process.env.AG_PULSE_REMOTE_BRIDGE_PORT ?? runtimeSettings().remoteBridgePort);
+  const bootSettings = runtimeSettings();
+  const bridgePort = validateBridgePort(process.env.AG_PULSE_REMOTE_BRIDGE_PORT ?? bootSettings.remoteBridgePort);
   const remoteBridge = bridgePort
     ? startRemoteBridgeServer({
         port: bridgePort,
@@ -408,11 +419,29 @@ if (process.env.ANTIGRAVITY_SIDECAR_WEB_PORT) {
         health: () => ({ ok: true, mode: 'sidecar-bridge', port: bridgePort }),
       })
     : null;
+  const headlessRemote = isRemoteHeadlessHost({ server: store.client?.server, hasLocalHostApp: Boolean(resolveHostResources()) });
+  const rawSocketSetting = process.env.AG_PULSE_REMOTE_BRIDGE_SOCKET ?? bootSettings.remoteBridgeSocket;
+  const defaultSocketDir = process.platform === 'linux' ? dirname(paths.settings) : paths.data;
+  const bridgeSocketPath = rawSocketSetting === false || rawSocketSetting === '0'
+    ? null
+    : typeof rawSocketSetting === 'string' && rawSocketSetting
+      ? validateBridgeSocketPath(rawSocketSetting)
+      : (headlessRemote || bridgePort || rawSocketSetting === true)
+        ? validateBridgeSocketPath(join(defaultSocketDir, 'bridge.sock'))
+        : null;
+  const remoteUnixBridge = bridgeSocketPath
+    ? startRemoteUnixBridgeServer({
+        socketPath: bridgeSocketPath,
+        metrics,
+        health: () => ({ ok: true, mode: 'sidecar-unix-bridge', socketPath: bridgeSocketPath }),
+      })
+    : null;
   const passiveUpdateBoot=setTimeout(()=>{if(owns()&&typeof updater?.checkPassive==='function')void updater.checkPassive().catch(()=>{});},4000);passiveUpdateBoot.unref?.();
   const passiveUpdateTimer=setInterval(()=>{if(owns()&&typeof updater?.checkPassive==='function')void updater.checkPassive().catch(()=>{});},5*60*1000);passiveUpdateTimer.unref?.();
   const shutdown=async()=>{
     clearTimeout(passiveUpdateBoot);clearInterval(passiveUpdateTimer);
     try { remoteBridge?.close(); } catch {}
+    try { remoteUnixBridge?.close(); } catch {}
     try { remoteTunnels.dispose(); } catch {}
     auditService.dispose();insightsScanner.dispose();usage.dispose();store.dispose();
     const exitTimer=setTimeout(()=>process.exit(0),2000);exitTimer.unref();
