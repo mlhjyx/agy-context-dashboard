@@ -537,6 +537,17 @@ test('RemoteSshTunnelManager prefers remote UDS tunnel and seamlessly falls back
   const epTcp = await mgr.ensure('dev@198.51.100.10', { remotePort: 17891, force: true });
   assert.equal(epTcp?.transport, 'ssh-auto-tunnel');
   assert.ok(spawned.at(-1).args.includes('127.0.0.1:53003:127.0.0.1:17891'));
+
+  // Timeout or HTTP 500 on a slow remote turn must NOT kill the healthy tunnel
+  const spawnedBefore = spawned.length;
+  assert.equal(await mgr.verifyOrMarkFailed('dev@198.51.100.10', 17891, { kind: 'timeout' }), true);
+  assert.equal(await mgr.verifyOrMarkFailed('dev@198.51.100.10', 17891, { kind: 'http' }), true);
+  assert.equal((await mgr.ensure('dev@198.51.100.10', { remotePort: 17891 }))?.port, epTcp.port);
+  assert.equal(spawned.length, spawnedBefore, 'tunnel stays alive across transient timeout/HTTP 5xx');
+
+  // Transport error probes health first and keeps tunnel alive if health succeeds
+  assert.equal(await mgr.verifyOrMarkFailed('dev@198.51.100.10', 17891, { kind: 'transport' }), true);
+  assert.equal((await mgr.ensure('dev@198.51.100.10', { remotePort: 17891 }))?.port, epTcp.port);
   mgr.dispose();
 });
 

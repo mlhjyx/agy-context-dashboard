@@ -165,9 +165,9 @@ export function resolveRemoteEndpoint(remoteHost, settings) {
   return null;
 }
 
-export function fetchRemoteMetrics(endpoint, input = {}, { timeoutMs = 3500, requestFn = request } = {}) {
+export function fetchRemoteMetrics(endpoint, input = {}, { timeoutMs = 8000, requestFn = request } = {}) {
   const valid = validateLoopbackEndpoint(endpoint?.origin || endpoint);
-  if (!valid) return Promise.resolve({ ok: false, error: 'Invalid loopback endpoint' });
+  if (!valid) return Promise.resolve({ ok: false, kind: 'invalid', error: 'Invalid loopback endpoint' });
 
   const params = new URLSearchParams();
   if (typeof input.conversationId === 'string' && input.conversationId) params.set('conversationId', input.conversationId);
@@ -206,34 +206,34 @@ export function fetchRemoteMetrics(endpoint, input = {}, { timeoutMs = 3500, req
           bytes += Buffer.byteLength(chunk);
           if (bytes > MAX_REMOTE_RESPONSE_BYTES) {
             req.destroy(new Error('Remote metrics response too large'));
-            finish({ ok: false, error: 'Remote metrics response too large' });
+            finish({ ok: false, kind: 'payload', error: 'Remote metrics response too large' });
             return;
           }
           body += chunk;
         });
         res.on('end', () => {
           if (res.statusCode !== 200) {
-            finish({ ok: false, error: `Remote metrics HTTP ${res.statusCode}` });
+            finish({ ok: false, kind: 'http', statusCode: res.statusCode, error: `Remote metrics HTTP ${res.statusCode}` });
             return;
           }
           try {
             const parsed = JSON.parse(body);
             if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-              finish({ ok: false, error: 'Invalid remote metrics payload' });
+              finish({ ok: false, kind: 'payload', error: 'Invalid remote metrics payload' });
               return;
             }
             finish({ ok: true, data: parsed });
           } catch {
-            finish({ ok: false, error: 'Malformed remote metrics JSON' });
+            finish({ ok: false, kind: 'payload', error: 'Malformed remote metrics JSON' });
           }
         });
-        res.on('error', err => finish({ ok: false, error: err?.message || 'Remote response error' }));
+        res.on('error', err => finish({ ok: false, kind: 'transport', error: err?.message || 'Remote response error' }));
       },
     );
-    req.on('error', err => finish({ ok: false, error: err?.message || 'Remote connection failed' }));
+    req.on('error', err => finish({ ok: false, kind: 'transport', error: err?.message || 'Remote connection failed' }));
     req.setTimeout(timeoutMs, () => {
       req.destroy(new Error('Remote metrics timeout'));
-      finish({ ok: false, error: 'Remote metrics timeout' });
+      finish({ ok: false, kind: 'timeout', error: 'Remote metrics timeout' });
     });
     req.end();
   });
@@ -874,10 +874,11 @@ export class RemoteSshTunnelManager {
     inspectPidFn = defaultInspectPidCommand,
     killPidFn = defaultKillPid,
     now = Date.now,
-    idleMs = 120000,
-    readyTimeoutMs = 4000,
+    idleMs = 300000,
+    readyTimeoutMs = 6000,
     probeIntervalMs = 150,
     baseCooldownMs = 15000,
+    reconnectCooldownMs = 3000,
     maxCooldownMs = 120000,
   } = {}) {
     this.sshBin = sshBin;
@@ -898,6 +899,7 @@ export class RemoteSshTunnelManager {
     this.readyTimeoutMs = readyTimeoutMs;
     this.probeIntervalMs = probeIntervalMs;
     this.baseCooldownMs = baseCooldownMs;
+    this.reconnectCooldownMs = reconnectCooldownMs;
     this.maxCooldownMs = maxCooldownMs;
     this.tunnels = new Map();
     this.inFlight = new Map();
@@ -982,10 +984,11 @@ export class RemoteSshTunnelManager {
     } catch {}
   }
 
-  _recordFailure(key) {
+  _recordFailure(key, { soft = false } = {}) {
     const prev = this.failures.get(key) || { count: 0, until: 0 };
     const count = Math.min(prev.count + 1, 6);
-    const delay = Math.min(this.maxCooldownMs, this.baseCooldownMs * 2 ** (count - 1));
+    const base = soft && count === 1 ? Math.min(this.reconnectCooldownMs, this.baseCooldownMs) : this.baseCooldownMs;
+    const delay = Math.min(this.maxCooldownMs, base * 2 ** (count - 1));
     this.failures.set(key, { count, until: this.now() + delay });
   }
 
@@ -1006,7 +1009,7 @@ export class RemoteSshTunnelManager {
     if (changed) this._persistState();
   }
 
-  markFailed(remoteHost, remotePort = 17891) {
+  markFailed(remoteHost, remotePort = 17891, { soft = false } = {}) {
     const parsed = parseSshTarget(remoteHost);
     const rPort = validateBridgePort(remotePort) || 17891;
     if (!parsed) return;
@@ -1018,7 +1021,33 @@ export class RemoteSshTunnelManager {
       this.tunnels.delete(key);
       this._persistState();
     }
-    this._recordFailure(key);
+    this._recordFailure(key, { soft });
+  }
+
+  async verifyOrMarkFailed(remoteHost, remotePort = 17891, { kind = 'transport' } = {}) {
+    const parsed = parseSshTarget(remoteHost);
+    const rPort = validateBridgePort(remotePort) || 17891;
+    if (!parsed) return false;
+    const key = this._tunnelKey(parsed, rPort);
+    const entry = this.tunnels.get(key);
+    // Slow /api/metrics responses (timeout) or transient HTTP 5xx do not mean the
+    // SSH tunnel died. Keep the healthy tunnel open instead of tearing it down.
+    if (kind === 'timeout' || kind === 'http' || kind === 'payload') {
+      if (entry && !entry.closed) {
+        entry.lastUsedAt = this.now();
+        return true;
+      }
+      return false;
+    }
+    if (entry && !entry.closed && entry.endpoint?.port) {
+      const alive = await this.probeHealthFn(entry.endpoint.port, { timeoutMs: 800 }).catch(() => false);
+      if (alive && !entry.closed) {
+        entry.lastUsedAt = this.now();
+        return true;
+      }
+    }
+    this.markFailed(remoteHost, rPort, { soft: Boolean(entry?.ready) });
+    return false;
   }
 
   async _resolveRemoteSocket(parsed, force) {

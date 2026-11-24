@@ -62,6 +62,25 @@ const remoteBackoff = createUnreachableTracker();
 const remoteTunnels = new RemoteSshTunnelManager({ stateFile: join(paths.data, 'remote-tunnels.json') });
 const remoteMetricsCache = new Map();
 const remoteMetricsInflight = new Map();
+const lastGoodRemoteCache = new Map();
+const STALE_REMOTE_GRACE_MS = 45000;
+const lastGoodKey = (remoteHost, conversationId) => `${remoteHost.toLowerCase()}:${String(conversationId || '').toLowerCase()}`;
+const rememberGoodRemote = (remoteHost, conversationId, data, transport) => {
+  const key = lastGoodKey(remoteHost, conversationId);
+  if (conversationId && !data?.speed && lastGoodRemoteCache.get(key)?.data?.speed) return;
+  lastGoodRemoteCache.delete(key);
+  lastGoodRemoteCache.set(key, { data, transport, savedAt: Date.now() });
+  while (lastGoodRemoteCache.size > 16) lastGoodRemoteCache.delete(lastGoodRemoteCache.keys().next().value);
+};
+const recallGoodRemote = (remoteHost, conversationId) => {
+  const entry = lastGoodRemoteCache.get(lastGoodKey(remoteHost, conversationId));
+  if (!entry) return null;
+  if (Date.now() - entry.savedAt > STALE_REMOTE_GRACE_MS) {
+    lastGoodRemoteCache.delete(lastGoodKey(remoteHost, conversationId));
+    return null;
+  }
+  return entry;
+};
 const fetchCachedRemoteMetrics = async (transport, remoteHost, endpoint, input) => {
   const bypass = input?.force === true || input?.quotaRefresh === true || input?.contextDetail === true || input?.usageSync === true || input?.usageOnly === true;
   const cacheKey = `${transport}:${remoteHost.toLowerCase()}:${String(input?.conversationId || '').toLowerCase()}:${input?.usageScope || ''}`;
@@ -74,10 +93,17 @@ const fetchCachedRemoteMetrics = async (transport, remoteHost, endpoint, input) 
   }
   const run = fetchRemoteMetrics(endpoint, input).then(res => {
     if (res.ok && !input?.usageOnly) {
+      if (input?.conversationId && !res.data?.speed && res.data?.sessionError) {
+        const prev = recallGoodRemote(remoteHost, input.conversationId);
+        if (prev?.data?.speed) {
+          return { ok: true, data: { ...res.data, speed: prev.data.speed, connection: 'stale' } };
+        }
+      }
       const isRunning = /RUNNING/i.test(String(res.data?.speed?.status || ''));
       const ttl = isRunning ? 3500 : 6000;
       remoteMetricsCache.set(cacheKey, { res, expiresAt: Date.now() + ttl });
       if (remoteMetricsCache.size > 16) remoteMetricsCache.delete(remoteMetricsCache.keys().next().value);
+      rememberGoodRemote(remoteHost, input?.conversationId, res.data, transport);
     } else if (!res.ok) {
       remoteMetricsCache.delete(cacheKey);
     }
@@ -170,7 +196,7 @@ const metrics = async input => {
           update,
         });
       }
-      remoteBackoff.markFailed(resolved.endpoint.origin);
+      if (remoteRes.kind === 'transport') remoteBackoff.markFailed(resolved.endpoint.origin);
     }
     if (!resolved && settings.autoSshTunnel !== false) {
       const rPort = validateBridgePort(settings.remoteBridgePort) || 17891;
@@ -200,8 +226,30 @@ const metrics = async input => {
             update,
           });
         }
-        remoteTunnels.markFailed(remoteHost, rPort);
+        await remoteTunnels.verifyOrMarkFailed(remoteHost, rPort, { kind: remoteRes.kind });
       }
+    }
+    // Preserve the last live remote snapshot briefly during slow remote turns
+    // or brief SSH reconnects so the composer strip never collapses to a single
+    // quota ring on transient blips.
+    const staleRemote = input?.usageOnly !== true ? recallGoodRemote(remoteHost, input?.conversationId) : null;
+    if (staleRemote) {
+      let localBase = null;
+      if (!Array.isArray(staleRemote.data?.groups) || !staleRemote.data.groups.length) {
+        localBase = await store.snapshot({ conversationId: null, force: false, selectLatest: false, orchestratorSettings }).catch(() => null);
+      }
+      return mergeRemoteMetrics({
+        remoteData: { ...staleRemote.data, connection: 'stale' },
+        localBase,
+        remoteHost,
+        liveComposerModel,
+        transport: staleRemote.transport,
+        preferences: prefs,
+        theme,
+        orchestratorSettings,
+        integration: integration.health,
+        update,
+      });
     }
     if (settings.remoteRendererRpc !== false && input?.usageOnly !== true && typeof input?.fetchRemoteTrajectory === 'function' && input?.conversationId) {
       const rpcKey = `${remoteHost.toLowerCase()}:${input.conversationId.toLowerCase()}`;
