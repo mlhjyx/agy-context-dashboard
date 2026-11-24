@@ -56,6 +56,51 @@ const preferences=new PreferencesStore();
 const updater=new AppUpdater({pluginDir:join(HERE,'..','..'),dataDir:paths.data});
 let liveComposerModel = null;
 const remoteBackoff = createUnreachableTracker();
+const rendererRpcCache = new Map();
+const rendererRpcInflight = new Map();
+const fetchThrottledRendererSpeed = async (cacheKey, input, orchestratorSettings) => {
+  const now = Date.now();
+  const cached = rendererRpcCache.get(cacheKey);
+  if (input?.force !== true && cached && now < cached.nextAt) {
+    return cached.speed;
+  }
+  if (rendererRpcInflight.has(cacheKey)) {
+    return cached?.speed ?? null;
+  }
+  const started = now;
+  const task = (async () => {
+    const projected = await input.fetchRemoteTrajectory(input.conversationId).catch(() => null);
+    const elapsed = Date.now() - started;
+    const normalized = normalizeRendererTrajectory(projected, input.conversationId);
+    if (!normalized) {
+      rendererRpcCache.set(cacheKey, { speed: cached?.speed ?? null, nextAt: Date.now() + 15000 });
+      return cached?.speed ?? null;
+    }
+    const speed = trajectoryMetrics(normalized, null, { orchestratorSettings });
+    if (speed && (speed.requests > 0 || speed.steps > 0 || speed.context)) {
+      if (speed.context) {
+        const comp = compositionMetrics({
+          context: speed.context,
+          steps: normalized.trajectory.steps,
+          generators: normalized.trajectory.generatorMetadata,
+          hostUsage: normalized.hostUsage || null,
+        });
+        if (comp) speed.contextComposition = comp;
+      }
+      speed.conversationId = input.conversationId.toLowerCase();
+      const ttl = Math.min(30000, Math.max(8000, elapsed * 12));
+      rendererRpcCache.set(cacheKey, { speed, nextAt: Date.now() + ttl });
+      if (rendererRpcCache.size > 16) rendererRpcCache.delete(rendererRpcCache.keys().next().value);
+      return speed;
+    }
+    rendererRpcCache.set(cacheKey, { speed: null, nextAt: Date.now() + 8000 });
+    return null;
+  })().finally(() => {
+    rendererRpcInflight.delete(cacheKey);
+  });
+  rendererRpcInflight.set(cacheKey, task);
+  return task;
+};
 const metrics = async input => {
   if(ownership&&!await ownership.isOwner())throw Error('Sidecar ownership changed');
   runtimeSettings();
@@ -100,35 +145,22 @@ const metrics = async input => {
       remoteBackoff.markFailed(resolved.endpoint.origin);
     }
     if (typeof input?.fetchRemoteTrajectory === 'function' && input?.conversationId) {
-      const projected = await input.fetchRemoteTrajectory(input.conversationId).catch(() => null);
-      const normalized = normalizeRendererTrajectory(projected, input.conversationId);
-      if (normalized) {
-        const speed = trajectoryMetrics(normalized, null, { orchestratorSettings });
-        if (speed && (speed.requests > 0 || speed.steps > 0 || speed.context)) {
-          if (speed.context) {
-            const comp = compositionMetrics({
-              context: speed.context,
-              steps: normalized.trajectory.steps,
-              generators: normalized.trajectory.generatorMetadata,
-              hostUsage: normalized.hostUsage || null,
-            });
-            if (comp) speed.contextComposition = comp;
-          }
-          speed.conversationId = input.conversationId.toLowerCase();
-          const localBase = await store.snapshot({ conversationId: null, force: input?.force === true, quotaRefresh: input?.quotaRefresh === true, selectLatest: false, orchestratorSettings }).catch(() => null);
-          return mergeRemoteMetrics({
-            remoteData: { connection: 'live', groups: [], speed },
-            localBase,
-            remoteHost,
-            liveComposerModel,
-            transport: 'renderer-rpc',
-            preferences: prefs,
-            theme,
-            orchestratorSettings,
-            integration: integration.health,
-            update,
-          });
-        }
+      const rpcKey = `${remoteHost.toLowerCase()}:${input.conversationId.toLowerCase()}`;
+      const speed = await fetchThrottledRendererSpeed(rpcKey, input, orchestratorSettings);
+      if (speed) {
+        const localBase = await store.snapshot({ conversationId: null, force: input?.force === true, quotaRefresh: input?.quotaRefresh === true, selectLatest: false, orchestratorSettings }).catch(() => null);
+        return mergeRemoteMetrics({
+          remoteData: { connection: 'live', groups: [], speed },
+          localBase,
+          remoteHost,
+          liveComposerModel,
+          transport: 'renderer-rpc',
+          preferences: prefs,
+          theme,
+          orchestratorSettings,
+          integration: integration.health,
+          update,
+        });
       }
     }
     const localBase = await store.snapshot({ conversationId: null, force: input?.force === true, quotaRefresh: input?.quotaRefresh === true, selectLatest: false, orchestratorSettings }).catch(() => null);
