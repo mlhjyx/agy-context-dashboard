@@ -180,3 +180,42 @@ test('ancient generatorMetadata entry lacking stepIndices never rewinds metadata
  assert.ok(firstMeta);
  assert.equal(firstMeta[1].generatorMetadataOffset,12,'must only revalidate the tail, not rewind to 0');
 });
+
+test('mid-fetch host growth performs bounded trailing step catch-up instead of discarding steps',async()=>{
+ const {client,state}=fixture();
+ let injected=false;
+ const origCall=client.call.bind(client);
+ client.call=async(method,body={})=>{
+  const res=await origCall(method,body);
+  if(method==='GetCascadeTrajectorySteps'&&body.stepOffset===3&&!injected){
+   injected=true;
+   state.steps.push({type:'PLANNER_RESPONSE',i:4});
+   state.generators.push({i:2,stepIndices:[4]});
+  }
+  return res;
+ };
+ const r=await client.trajectory(id);
+ assert.equal(r.trajectory.steps.length,5,'should catch up newly added trailing step');
+ assert.equal(r.trajectory.generatorMetadata.length,3);
+ assert.equal(client.reader.entries.size,1);
+});
+
+test('transient active-session errors never trigger archivedSession full re-download',async t=>{
+ const cid='11111111-1111-1111-1111-111111111111';
+ let archivedCalls=0;
+ const client={
+  discover:async()=>({pid:1}),
+  call:async m=>{
+   if(m==='GetUserStatus')return {userStatus:{email:'fixture@example.test'}};
+   if(m==='RetrieveUserQuotaSummary')return {};
+   return {};
+  },
+  trajectory:async()=>{throw new Error('会话仍在更新，请等待下一次刷新');},
+ };
+ const store=new MetricsStore(client,{history:{load:async()=>null,save:async()=>null},transcripts:null});
+ t.after(()=>store.dispose());
+ store.archivedSession=async()=>{archivedCalls++;return null;};
+ const snap=await store.snapshot({conversationId:cid,selectLatest:false});
+ assert.equal(archivedCalls,0,'transient update error must not trigger archivedSession');
+ assert.match(String(snap.sessionError||''),/仍在更新/);
+});

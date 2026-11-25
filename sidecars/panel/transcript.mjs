@@ -136,7 +136,10 @@ function aggregate(entry){
  if(!entry.boundary)return empty('unavailable','invalid-boundary');
  if(entry.error)return empty('unavailable',entry.error);
  if(!entry.state)return empty('loading','reading');
- const s=entry.state,out=empty('partial','reading');let partial=s.invalid,unmatched=false;
+ const s=entry.state;
+ const aggKey=`${entry.boundaryVersion||0}:${s.version||0}:${s.offset}:${s.rows.size}:${s.eof?1:0}:${s.invalid?1:0}:${s.limit?1:0}:${s.lineStarted?1:0}`;
+ if(entry.cachedAgg&&entry.cachedAggKey===aggKey)return entry.cachedAgg;
+ const out=empty('partial','reading');let partial=s.invalid,unmatched=false;
  const toolMap=new Map(),warnings=[],matched=[...s.rows.values()].sort((a,b)=>a.index-b.index);
  const pendingCalls=[];
  const ensureTool=(name,source='')=>{
@@ -199,11 +202,13 @@ function aggregate(entry){
  else if(s.eof){out.reason=null;}
  out.complete=s.eof&&!s.lineStarted&&!partial&&covered;
  out.status=out.complete?'ready':'partial';
- return safeTranscriptStats(out);
+ const res=safeTranscriptStats(out);
+ entry.cachedAgg=res;entry.cachedAggKey=aggKey;
+ return res;
 }
 const contains=(root,file)=>{const r=relative(root,file);return r!==''&&!r.startsWith('..')&&!isAbsolute(r);};
 const digest=bytes=>createHash('sha256').update(bytes).digest('hex');
-const newState=(identity,info)=>({identity,size:info.size,mtime:info.mtimeMs,offset:0,rows:new Map(),decoder:new StringDecoder('utf8'),parser:null,lineStarted:false,invalid:false,eof:false,limit:false,anchors:[]});
+const newState=(identity,info)=>({identity,size:info.size,mtime:info.mtimeMs,offset:0,rows:new Map(),decoder:new StringDecoder('utf8'),parser:null,lineStarted:false,invalid:false,eof:false,limit:false,anchors:[],version:1});
 
 export class TranscriptReader {
  constructor({root=transcriptBrainRoot(),maxEntries=8,maxRows=8192,bytesPerPass=2*1024*1024,passMs=100}={}){
@@ -219,8 +224,8 @@ export class TranscriptReader {
   const key=scope+':'+id.toLowerCase(),b=boundary(raw,this.maxRows);
   if(!b)return empty('unavailable','invalid-boundary');
   let entry=this.entries.get(key);
-  if(!entry)entry={key,id:id.toLowerCase(),state:null,error:null};
-  entry.boundary=b;entry.requested=true;
+  if(!entry)entry={key,id:id.toLowerCase(),state:null,error:null,boundaryVersion:0};
+  entry.boundary=b;entry.boundaryVersion=(entry.boundaryVersion||0)+1;entry.requested=true;
   this.entries.delete(key);this.entries.set(key,entry);
   while(this.entries.size>this.maxEntries)this.entries.delete(this.entries.keys().next().value);
   this.schedule();return aggregate(entry);
@@ -256,6 +261,7 @@ export class TranscriptReader {
   if(located.error){entry.error=located.error;entry.state=null;return;}
   const {file,info}=located,identity=[file,info.dev,info.ino,info.birthtimeMs].join(':');
   let s=entry.state;const changed=s&&(s.size!==info.size||s.mtime!==info.mtimeMs);
+  if(s&&!changed&&s.identity===identity&&s.eof&&!entry.error){return;}
   if(!s||s.identity!==identity||info.size<s.size||info.size<=s.size&&info.mtimeMs!==s.mtime){
    s=entry.state=newState(identity,info);
   }
@@ -270,6 +276,7 @@ export class TranscriptReader {
    }}
    s.size=info.size;s.mtime=info.mtimeMs;if(s.limit)return;
    const buffer=Buffer.alloc(65536),end=Math.min(info.size,s.offset+this.bytesPerPass),deadline=performance.now()+this.passMs;
+   const startOffset=s.offset;
    while(s.offset<end&&current()){
     const {bytesRead}=await handle.read(buffer,0,Math.min(buffer.length,end-s.offset),s.offset);
     if(!bytesRead)break;
@@ -297,6 +304,7 @@ export class TranscriptReader {
    }
    if(!current())return;
    s.eof=s.offset===info.size;
+   if(s.offset!==startOffset||s.eof)s.version=(s.version||0)+1;
   }finally{await handle.close();}
  }
 }

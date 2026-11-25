@@ -177,11 +177,26 @@ export class TrajectoryReader {
     if(!items)break;append(generators,items);
    }
    // A growing host may return newer metadata than the step-count snapshot.
-   // Do not cache or persist a mixed/incomplete revision.
-   if(generators.some(g=>(g.stepIndices||[]).some(i=>Number.isInteger(i)&&i>=steps.length)))throw new Error('会话仍在更新，请等待下一次刷新');
+   // On active large conversations, fetch up to 4 trailing step pages to catch
+   // up instead of discarding thousands of steps and restarting from offset 0.
+   let maxGenStep=-1;
+   for(const g of generators){
+    if(!Array.isArray(g?.stepIndices))continue;
+    for(const i of g.stepIndices)if(Number.isInteger(i)&&i>maxGenStep)maxGenStep=i;
+   }
+   let catchUpPages=0;
+   while(maxGenStep>=steps.length&&catchUpPages<4){
+    check();if(++pageCount>this.maxPages)throw new Error('会话统计分页数量超过上限');
+    const items=await this.fetchStepPage(id,steps.length,stepPages,check,null);
+    if(!items||!items.length)break;
+    append(steps,items);catchUpPages++;
+   }
+   if(maxGenStep>=steps.length)throw new Error('会话仍在更新，请等待下一次刷新');
+   const finalCount=count!==null&&steps.length>count?steps.length:count;
+   const finalMark=finalCount===count?mark:JSON.stringify([finalCount,summary.lastModifiedTime,summary.status,summary.lastUserInputStepIndex]);
    const value={trajectory:{cascadeId:id,steps,generatorMetadata:generators},numTotalSteps:steps.length,numTotalGeneratorMetadata:generators.length,status:summary.status};
    assertCurrent();this.cachedBytes-=entry.bytes;entry.bytes=bytes;this.cachedBytes+=bytes;
-   entry.data=value;entry.summary=summary;entry.mark=mark;entry.verifiedAt=this.client.now();this.entries.delete(id);this.entries.set(id,entry);
+   entry.data=value;entry.summary=finalCount===count?summary:{...summary,stepCount:finalCount};entry.mark=finalMark;entry.verifiedAt=this.client.now();this.entries.delete(id);this.entries.set(id,entry);
    this.failures.delete(id);this.trim(id);
    return value;
   })().catch(error=>{

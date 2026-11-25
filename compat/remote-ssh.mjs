@@ -3,6 +3,7 @@ import { createServer as createNetServer } from 'node:net';
 import { execFile, execFileSync, spawn } from 'node:child_process';
 import { chmodSync, lstatSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
+import { gzip, gunzip } from 'node:zlib';
 
 const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost']);
 const HOST_CHARS = /^[A-Za-z0-9._:@\[\]-]+$/;
@@ -196,36 +197,52 @@ export function fetchRemoteMetrics(endpoint, input = {}, { timeoutMs = 8000, req
         headers: {
           Host: `127.0.0.1:${valid.port}`,
           Accept: 'application/json',
+          'Accept-Encoding': 'gzip',
         },
       },
       res => {
-        let body = '';
+        const chunks = [];
         let bytes = 0;
-        res.setEncoding('utf8');
         res.on('data', chunk => {
-          bytes += Buffer.byteLength(chunk);
+          const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk, 'utf8');
+          bytes += buf.length;
           if (bytes > MAX_REMOTE_RESPONSE_BYTES) {
             req.destroy(new Error('Remote metrics response too large'));
             finish({ ok: false, kind: 'payload', error: 'Remote metrics response too large' });
             return;
           }
-          body += chunk;
+          chunks.push(buf);
         });
         res.on('end', () => {
           if (res.statusCode !== 200) {
             finish({ ok: false, kind: 'http', statusCode: res.statusCode, error: `Remote metrics HTTP ${res.statusCode}` });
             return;
           }
-          try {
-            const parsed = JSON.parse(body);
-            if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-              finish({ ok: false, kind: 'payload', error: 'Invalid remote metrics payload' });
-              return;
+          const rawBuf = Buffer.concat(chunks, bytes);
+          const parseJson = text => {
+            try {
+              const parsed = JSON.parse(text);
+              if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+                finish({ ok: false, kind: 'payload', error: 'Invalid remote metrics payload' });
+                return;
+              }
+              finish({ ok: true, data: parsed });
+            } catch {
+              finish({ ok: false, kind: 'payload', error: 'Malformed remote metrics JSON' });
             }
-            finish({ ok: true, data: parsed });
-          } catch {
-            finish({ ok: false, kind: 'payload', error: 'Malformed remote metrics JSON' });
+          };
+          const encoding = String(res.headers?.['content-encoding'] || '').trim().toLowerCase();
+          if (encoding === 'gzip') {
+            gunzip(rawBuf, { maxOutputLength: MAX_REMOTE_RESPONSE_BYTES }, (err, decoded) => {
+              if (err) {
+                finish({ ok: false, kind: 'payload', error: 'Malformed remote metrics gzip payload' });
+                return;
+              }
+              parseJson(decoded.toString('utf8'));
+            });
+            return;
           }
+          parseJson(rawBuf.toString('utf8'));
         });
         res.on('error', err => finish({ ok: false, kind: 'transport', error: err?.message || 'Remote response error' }));
       },
@@ -669,8 +686,26 @@ function createBridgeRequestHandler({ metrics, health = null, defaultHealth = { 
           ...(url.searchParams.get('usageOnly') === '1' ? { usageOnly: true } : {}),
           ...(scopeParam === 'local' || scopeParam === 'account' ? { usageScope: scopeParam } : {}),
         });
+        const jsonBuf = Buffer.from(JSON.stringify(payload), 'utf8');
+        const acceptGzip = /\bgzip\b/i.test(String(req.headers['accept-encoding'] || ''));
+        if (acceptGzip && jsonBuf.length >= 1024) {
+          gzip(jsonBuf, { level: 1 }, (err, compressed) => {
+            if (err) {
+              res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+              res.end(jsonBuf);
+              return;
+            }
+            res.writeHead(200, {
+              'Content-Type': 'application/json; charset=utf-8',
+              'Content-Encoding': 'gzip',
+              Vary: 'Accept-Encoding',
+            });
+            res.end(compressed);
+          });
+          return;
+        }
         res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-        res.end(JSON.stringify(payload));
+        res.end(jsonBuf);
       } catch {
         res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
         res.end('{"error":"Remote metrics temporarily unavailable"}');

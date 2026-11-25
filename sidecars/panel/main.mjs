@@ -102,7 +102,9 @@ const fetchCachedRemoteMetrics = async (transport, remoteHost, endpoint, input) 
         }
       }
       const isRunning = /RUNNING/i.test(String(res.data?.speed?.status || ''));
-      const ttl = Math.min(12000, Math.max(isRunning ? 3500 : 6000, elapsedMs * 3));
+      const isLargeRemote = (res.data?.speed?.steps || 0) >= 2000;
+      const baseRemoteTtl = isLargeRemote ? (isRunning ? 7000 : 10000) : (isRunning ? 3500 : 6000);
+      const ttl = Math.min(15000, Math.max(baseRemoteTtl, elapsedMs * 3));
       remoteMetricsCache.set(cacheKey, { res, expiresAt: Date.now() + ttl });
       if (remoteMetricsCache.size > 16) remoteMetricsCache.delete(remoteMetricsCache.keys().next().value);
       rememberGoodRemote(remoteHost, input?.conversationId, res.data, transport);

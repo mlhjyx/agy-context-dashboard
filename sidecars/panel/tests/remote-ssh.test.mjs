@@ -611,3 +611,46 @@ test('buildRendererTrajectoryProbe fetches incremental paginated metadata withou
   const legacyRes = await vm.runInContext(buildRendererTrajectoryProbe(cid, { paginatedOnly: true }), vm.createContext(legacySandbox));
   assert.equal(legacyRes, null);
 });
+
+test('remote bridge compresses large metrics payloads with gzip and fetchRemoteMetrics transparently decompresses', async t => {
+  const bigPayload = {
+    connection: 'live',
+    groups: [{ id: 'gemini', windows: {} }],
+    speed: {
+      conversationId: '11111111-2222-3333-4444-555555555555',
+      sessionTps: 120,
+      delegatedConversations: Array.from({ length: 44 }, (_, i) => `${String(i).padStart(8, '0')}-2222-3333-4444-555555555555`),
+      note: 'x'.repeat(4000),
+    },
+  };
+  const server = startRemoteBridgeServer({
+    port: 18949,
+    metrics: async () => bigPayload,
+  });
+  await new Promise(resolve => server.once('listening', resolve));
+  t.after(() => new Promise(resolve => server.close(resolve)));
+
+  // Verify raw wire response uses gzip encoding and is much smaller than uncompressed JSON
+  const rawWire = await new Promise((resolve, reject) => {
+    const req = request({
+      hostname: '127.0.0.1',
+      port: 18949,
+      path: '/api/metrics',
+      headers: { Host: '127.0.0.1:18949', 'Accept-Encoding': 'gzip' },
+    }, res => {
+      const chunks = [];
+      res.on('data', c => chunks.push(c));
+      res.on('end', () => resolve({ encoding: res.headers['content-encoding'], bytes: Buffer.concat(chunks).length }));
+    });
+    req.on('error', reject);
+    req.end();
+  });
+  assert.equal(rawWire.encoding, 'gzip');
+  assert.ok(rawWire.bytes < JSON.stringify(bigPayload).length / 3);
+
+  // Verify fetchRemoteMetrics decodes the gzip payload transparently
+  const res = await fetchRemoteMetrics('http://127.0.0.1:18949', {});
+  assert.equal(res.ok, true);
+  assert.equal(res.data.speed.sessionTps, 120);
+  assert.equal(res.data.speed.delegatedConversations.length, 44);
+});

@@ -18,6 +18,15 @@ const GUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const LOCAL_SCOPE = createHash('sha256').update('ag-pulse:local-unauthenticated').digest('hex');
 const BACKGROUND_RECHECK_MS=5*60*1000, BACKGROUND_MANUAL_COOLDOWN_MS=10*1000;
 const settledStatus=s=>/IDLE|DONE|COMPLETED|CANCELLED|CANCELED|STOPPED|FAILED|ERROR/.test(String(s||''));
+const isTransientSessionError=e=>/仍在更新|重新连接|超时|分页|后台处理/.test(String(e?.message||''));
+const rawUsageSignature=raw=>{
+  const gs=raw?.trajectory?.generatorMetadata;
+  if(!Array.isArray(gs)||!gs.length)return '0';
+  const fmt=u=>u?`${u.inputTokens??''}/${u.cacheReadTokens??''}/${u.cacheWriteTokens??''}/${u.outputTokens??''}/${u.responseId??''}`:'';
+  const last=gs[gs.length-1]?.chatModel?.usage;
+  const prev=gs.length>1?gs[gs.length-2]?.chatModel?.usage:null;
+  return `${gs.length}:${fmt(prev)}|${fmt(last)}`;
+};
 export class MetricsStore {
   constructor(client = new AntigravityClient(), { history = new SessionHistory(), onTrajectory = null, onBackgroundResult = null, background = undefined, transcripts = new TranscriptReader(), owns=()=>true, orchestratorSettings = null } = {}) {
     this.client = client; this.history = history; this.onTrajectory=onTrajectory; this.onBackgroundResult=onBackgroundResult; this.transcripts=transcripts; this.owns=owns; this.orchestratorSettings=orchestratorSettings;
@@ -228,10 +237,14 @@ export class MetricsStore {
     const orchKey = orchestratorSettings ? `${orchestratorSettings.orchestratorModel || ''}\0${orchestratorSettings.orchestratorExecutorModel || ''}` : '';
     let entry = this.sessions.get(id);
     if (entry?.pending) return entry.pending;
+    const stepCountCached = entry?.data?.steps || 0;
     const isSettledCached = Boolean(entry?.data?.status && settledStatus(entry.data.status) && (!entry.data.taskUsage || entry.data.taskUsage.state === 'ready'));
-    const largeSession = (entry?.data?.steps || 0) >= 1000;
-    const baseTtlMs = isSettledCached ? 5000 : largeSession ? 3000 : 1800;
-    const sessionTtlMs = Math.min(10000, Math.max(baseTtlMs, (entry?.lastReadMs || 0) * 3));
+    const baseTtlMs = isSettledCached
+      ? (stepCountCached >= 2000 ? 10000 : 5000)
+      : stepCountCached >= 3000 ? 6000
+      : stepCountCached >= 1000 ? 4000
+      : 1800;
+    const sessionTtlMs = Math.min(15000, Math.max(baseTtlMs, (entry?.lastReadMs || 0) * 3));
     if (!force && entry?.data && Date.now() - entry.updatedAt < sessionTtlMs && (entry.orchKey || '') === orchKey) return entry.data;
     entry ||= {};
     this.sessions.set(id, entry);
@@ -260,7 +273,8 @@ export class MetricsStore {
       }
       const isSettled=Boolean(entry.data?.status&&settledStatus(entry.data.status)&&(!entry.data.taskUsage||entry.data.taskUsage.state==='ready'));
       const readStartedAt = Date.now();
-      const raw = await this.client.trajectory(id,{force,isCurrent:current,summaryTtlMs:isSettled?12000:1800});
+      const summaryTtlMs = isSettled ? 12000 : stepCountCached >= 3000 ? 5000 : 1800;
+      const raw = await this.client.trajectory(id,{force,isCurrent:current,summaryTtlMs});
       const readElapsedMs = Math.max(0, Date.now() - readStartedAt);
       if (!current()) throw new Error('后台已重新连接，请等待刷新');
       entry.lastReadMs = readElapsedMs;
@@ -275,7 +289,9 @@ export class MetricsStore {
         entry.updatedAt = Date.now();
         return entry.data;
       }
-      if(this.onTrajectory){try{const result=await this.onTrajectory(scope,id,raw,{isCurrent:current,guardKey:entry});if(current()&&result?.deferred!==true)this.setUsagePersistenceError('foreground:'+id,false);}catch{if(current())this.setUsagePersistenceError('foreground:'+id,true);}}
+      const nextUsageSig = rawUsageSignature(raw);
+      const skipUsageIngest = !force && entry.usagePersistedOnce === true && entry.lastUsageSig === nextUsageSig && !this.usagePersistenceFailures.has('foreground:' + id);
+      if(this.onTrajectory && !skipUsageIngest){try{const result=await this.onTrajectory(scope,id,raw,{isCurrent:current,guardKey:entry});if(current()){entry.lastUsageSig=nextUsageSig;entry.usagePersistedOnce=true;if(result?.deferred!==true)this.setUsagePersistenceError('foreground:'+id,false);}}catch{if(current())this.setUsagePersistenceError('foreground:'+id,true);}}
       if (!current()) throw new Error('后台已重新连接，请等待刷新');
       entry.collection=null;entry.lastSuccessAt=new Date().toISOString();
       const fresh = trajectoryMetrics(raw, null, { orchestratorSettings });
@@ -291,14 +307,24 @@ export class MetricsStore {
       fresh.delegatedConversations=[...new Set([...delegatedIds(id,raw,this.client.reader?.summaries||{},task?.swarmMembers||null),...(entry.data?.delegatedConversations||[])])].slice(0,128);
       fresh.taskUsage=this.delegated.request(scope,id,raw,{saved:entry.data?.taskUsage,knownIds:fresh.delegatedConversations,force,isCurrent:current});
       // Optional background I/O cannot delay or fail the core metrics request.
-      try { if(this.transcripts)fresh.transcriptStats=this.transcripts.request(scope,id,raw); } catch {}
+      // On very large active conversations, throttle synchronous transcript
+      // re-aggregation so 5k+ step runs do not burn CPU on every tool step.
+      const reuseLargeTranscript = !force && rawStepsLen >= 2000 && entry.data?.transcriptStats && entry.lastTranscriptAt && Date.now() - entry.lastTranscriptAt < 15000;
+      if (reuseLargeTranscript) {
+        fresh.transcriptStats = entry.data.transcriptStats;
+      } else {
+        try { if(this.transcripts){fresh.transcriptStats=this.transcripts.request(scope,id,raw);entry.lastTranscriptAt=Date.now();} } catch {}
+      }
       // Composition is pure arithmetic over already-collected statistics; the
       // exact customization figure is attached lazily in snapshot().
       fresh.contextComposition=compositionMetrics({context:fresh.context,steps:raw.trajectory?.steps,generators:raw.trajectory?.generatorMetadata,transcript:fresh.transcriptStats});
       entry.data = {...reconcileMetrics(entry.data,fresh,entry.savedAt || null),conversationId:id}; entry.updatedAt = Date.now(); entry.orchKey = orchKey;
       entry.lastRaw = raw; entry.lastRawSteps = rawStepsLen; entry.lastRawGens = rawGensLen; entry.lastRawStatus = rawStatus;
-      try { const saved = await this.history.save(scope,id,entry.data,{isCurrent:current}); if (saved&&current()) entry.savedAt = saved.savedAt; if (current()) this.persistenceError = null; }
-      catch { if(current())this.persistenceError = '统计暂时无法保存到本地'; }
+      const deferLargeHistorySave = !force && rawStepsLen >= 2000 && !settledStatus(fresh.status) && entry.savedDiskAt && Date.now() - entry.savedDiskAt < 15000;
+      if (!deferLargeHistorySave) {
+        try { const saved = await this.history.save(scope,id,entry.data,{isCurrent:current}); if (saved&&current()) { entry.savedAt = saved.savedAt; entry.savedDiskAt = Date.now(); } if (current()) this.persistenceError = null; }
+        catch { if(current())this.persistenceError = '统计暂时无法保存到本地'; }
+      }
       if (!current()) throw new Error('后台已重新连接，请等待刷新');
       return entry.data;
     })().catch(error => {
@@ -419,7 +445,7 @@ export class MetricsStore {
       if (selected) {
         try { speed = await this.session(selected, force, { orchestratorSettings: effectiveOrch }); }
         catch (e) {
-          if (conversationId && GUID.test(conversationId) && !collectionFailure(e)) {
+          if (conversationId && GUID.test(conversationId) && !collectionFailure(e) && !isTransientSessionError(e)) {
             try { speed = await this.archivedSession(selected, { force, orchestratorSettings: effectiveOrch }); } catch {}
           }
           if (!speed) sessionError = e.message;
