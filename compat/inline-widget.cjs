@@ -476,19 +476,23 @@ module.exports = function installAgPulseInlineWidget() {
   let refreshRequest=null,manualRequest=null,hoverQuotaRequest=null,lastQuotaHoverAt=0,requestEpoch=0,scopeRequestEpoch=0;
   let composer=null,usageDashboard=null,updateMenu=null;
   let remoteSessionNote=null,languageRow=null,settingsDialog=null,settingsOpen=false,settingsTrigger=null,saveNote=null,lastBarLayoutSig='',lastFooterHost='context',lastSettingsSig='',draggingChipId=null;
-  let stickyRemoteHost=null;
+  let stickyRemoteHost=null,remoteHostNode=null,remoteHostCheckedAt=0;
   const detectRemoteHost=()=>{
     if(surface&&typeof surface.remoteHost==='function'){
       const explicit=surface.remoteHost(composer);
       if(explicit){stickyRemoteHost=explicit;return explicit;}
     }
+    const now=Date.now();
+    if(remoteHostNode&&remoteHostNode.isConnected&&stickyRemoteHost&&now-remoteHostCheckedAt<5000)return stickyRemoteHost;
+    if(!stickyRemoteHost&&now-remoteHostCheckedAt<3000)return null;
+    remoteHostCheckedAt=now;
     const candidates=document.querySelectorAll('button,[role="button"],[data-remote-host]');
     for(const el of candidates){
       if(el.closest('main,[role="main"],article,pre,code,[contenteditable="true"],.rounded-composer'))continue;
       const attrHost=el.getAttribute('data-remote-host');
       if(attrHost){
         const cleaned=attrHost.trim().replace(/^ssh:\s*/i,'').trim();
-        if(cleaned&&/^[A-Za-z0-9._:@\[\]-]{1,120}$/.test(cleaned)){stickyRemoteHost=cleaned;return cleaned;}
+        if(cleaned&&/^[A-Za-z0-9._:@\[\]-]{1,120}$/.test(cleaned)){stickyRemoteHost=cleaned;remoteHostNode=el;return cleaned;}
       }
       const raw=(el.textContent||el.getAttribute('aria-label')||el.getAttribute('title')||'').replace(/\s+/g,' ').trim();
       const match=raw.match(/^SSH:\s*([A-Za-z0-9._:@\[\]-]{1,120})$/i);
@@ -499,8 +503,10 @@ module.exports = function installAgPulseInlineWidget() {
         if(!(rect.width>20&&rect.width<=420&&rect.height>=16&&rect.height<=64&&rect.left<400))continue;
       }
       stickyRemoteHost=match[1];
+      remoteHostNode=el;
       return stickyRemoteHost;
     }
+    remoteHostNode=null;
     return stickyRemoteHost;
   };
   let densityFrame=null,densityMotion=null,densityProbe=null;
@@ -2893,6 +2899,7 @@ module.exports = function installAgPulseInlineWidget() {
     get parkedKind(){return parkedKind;},
     mountTo,park,dispose,hide,fit,tick,position,updateGuide,stopDensityMotion,
     get isSettingsOpen(){return settingsOpen;},
+    get hasOpenOverlay(){return Boolean(cardName||settingsOpen||guideOpened);},
     closeSettings:closeSettingsModal,
     setPrimary(flag,id){
       const changed=isPrimary!==flag;
@@ -2916,13 +2923,24 @@ module.exports = function installAgPulseInlineWidget() {
     poll(){
       if(instDisposed||!node)return;
       if(!parked){fit();tick();position();}
-      if((!parked&&conversationId()!==lastConversation)||Date.now()-lastFetch>(document.hidden?10000:2200))refresh();
+      const pollInterval=document.hidden?10000:(stickyRemoteHost?4500:2200);
+      if((!parked&&conversationId()!==lastConversation)||Date.now()-lastFetch>pollInterval)refresh();
     },
   };
   }
+  let layoutTimer=null,positionFrame=null;
   function scheduleLayout(){
     if(disposed||layoutFrame!==null)return;
     layoutFrame=requestAnimationFrame(()=>{layoutFrame=null;if(disposed)return;mount();for(const inst of instances)if(!inst.parked){inst.fit();inst.position();}});
+  }
+  function scheduleOverlayPosition(){
+    if(disposed||positionFrame!==null)return;
+    if(!instances.some(inst=>!inst.parked&&inst.hasOpenOverlay))return;
+    positionFrame=requestAnimationFrame(()=>{positionFrame=null;if(disposed)return;for(const inst of instances)if(!inst.parked&&inst.hasOpenOverlay)inst.position();});
+  }
+  function scheduleThrottledLayout(){
+    if(disposed||layoutFrame!==null||layoutTimer!==null)return;
+    layoutTimer=setTimeout(()=>{layoutTimer=null;scheduleLayout();},180);
   }
   function mount(){
     if(disposed)return;
@@ -2972,12 +2990,23 @@ module.exports = function installAgPulseInlineWidget() {
     for(const inst of instances)if(inst!==primary)inst.setPrimary(false,`${ID}-${secondaryIndex++}`);
     if(primary)primary.setPrimary(true,ID);
   }
-  const observer=new MutationObserver(records=>{if(records.some(record=>!isOwnNode(record.target)))scheduleLayout();});observer.observe(document.documentElement,{childList:true,subtree:true,attributes:true,attributeFilter:['style','class','hidden','inert','data-cascade-id','data-testid','data-tooltip-id','aria-label','role','contenteditable']});
+  const observer=new MutationObserver(records=>{
+    const external=records.filter(record=>!isOwnNode(record.target));
+    if(!external.length)return;
+    const stablyMounted=instances.length>0&&instances.every(inst=>!inst.parked&&inst.node?.isConnected&&inst.composer?.editor?.isConnected);
+    if(!stablyMounted){scheduleLayout();return;}
+    // Streaming tokens & transcript scrolling emit frequent style/class updates
+    // outside the composer. Skip full-document composer scans for those and
+    // coalesce other structural DOM bursts to avoid 60fps layout reflows.
+    const onlyTranscriptAttr=external.every(r=>r.type==='attributes'&&(r.attributeName==='style'||r.attributeName==='class')&&!instances.some(inst=>inst.composer?.box?.contains(r.target)||inst.composer?.row?.contains(r.target)));
+    if(onlyTranscriptAttr)return;
+    scheduleThrottledLayout();
+  });observer.observe(document.documentElement,{childList:true,subtree:true,attributes:true,attributeFilter:['style','class','hidden','inert','data-cascade-id','data-testid','data-tooltip-id','aria-label','role','contenteditable']});
   const onKey=e=>{if(e.key==='Escape')for(const inst of instances){inst.hide();if(inst.isSettingsOpen)inst.closeSettings?.();}}, onPointer=e=>{for(const inst of instances)if(inst.node&&!e.composedPath().includes(inst.node)){inst.hide();inst.closeSettings?.({restoreFocus:false});}};
   const onFocus=e=>{if(!instances.length||!e.composedPath().some(isOwnNode))scheduleLayout();};
   const onMotionChange=()=>{for(const inst of instances)inst.stopDensityMotion();};
   document.addEventListener('keydown',onKey);document.addEventListener('pointerdown',onPointer);document.addEventListener('focusin',onFocus);
-  window.addEventListener('resize',scheduleLayout);document.addEventListener('scroll',scheduleLayout,true);
+  window.addEventListener('resize',scheduleLayout);document.addEventListener('scroll',scheduleOverlayPosition,true);
   densityMedia.addEventListener('change',onMotionChange);
   let lastPrefCheck=0;
   const pollHostPrefs=()=>{
@@ -2989,10 +3018,10 @@ module.exports = function installAgPulseInlineWidget() {
   const timerId=setInterval(()=>{mount();if(!instances.length)pollHostPrefs();for(const inst of instances)inst.poll();},1000);
   window.__agPulseDispose=()=>{
     disposed=true;hostI18nEpoch++;
-    clearInterval(timerId);if(layoutFrame!==null)cancelAnimationFrame(layoutFrame);observer.disconnect();preferences.dispose();hostUiLocalization.dispose();inlineCacheHit.dispose();barColorsPref.dispose();themeModePref.dispose();cacheHitTone.dispose();barPrefs.dispose();stripMode.dispose();hostI18n?.dispose();delete window.__agPulseOnPreferences;
+    clearInterval(timerId);if(layoutTimer!==null){clearTimeout(layoutTimer);layoutTimer=null;}if(layoutFrame!==null)cancelAnimationFrame(layoutFrame);if(positionFrame!==null){cancelAnimationFrame(positionFrame);positionFrame=null;}observer.disconnect();preferences.dispose();hostUiLocalization.dispose();inlineCacheHit.dispose();barColorsPref.dispose();themeModePref.dispose();cacheHitTone.dispose();barPrefs.dispose();stripMode.dispose();hostI18n?.dispose();delete window.__agPulseOnPreferences;
     for(const inst of instances.splice(0))inst.dispose();
     document.removeEventListener('keydown',onKey);document.removeEventListener('pointerdown',onPointer);document.removeEventListener('focusin',onFocus);
-    document.removeEventListener('scroll',scheduleLayout,true);window.removeEventListener('resize',scheduleLayout);
+    document.removeEventListener('scroll',scheduleOverlayPosition,true);window.removeEventListener('resize',scheduleLayout);
     densityMedia.removeEventListener('change',onMotionChange);
     document.removeEventListener('DOMContentLoaded',mount);
     window.__agPulseInlineInstalled=false;delete window.__agPulseDispose;

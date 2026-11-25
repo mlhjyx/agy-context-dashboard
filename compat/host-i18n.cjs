@@ -272,6 +272,37 @@ module.exports = function createHostI18n(options = {}) {
     return idx > 0 ? kids[idx - 1] : null;
   };
 
+  function isOwnImmutableElement(cur) {
+    if (!cur || cur.nodeType !== 1) return true;
+    const tag = cur.tagName ? cur.tagName.toUpperCase() : '';
+    if (IMMUTABLE_TAGS.has(tag)) return true;
+    if (typeof cur.matches === 'function') {
+      try {
+        if (cur.matches(IMMUTABLE_SELECTOR)) return true;
+      } catch { /* Fall back to explicit attribute checks below. */ }
+    }
+    if (typeof cur.hasAttribute === 'function') {
+      const testId = cur.getAttribute('data-testid') || '';
+      if (cur.hasAttribute('data-markdown-root') || cur.hasAttribute('data-pulse-widget')
+        || cur.hasAttribute('data-ag-pulse-bar') || cur.hasAttribute('data-ag-i18n-ignore')
+        || cur.hasAttribute('data-ag-localization-skip') || cur.hasAttribute('data-model-base')
+        || (cur.hasAttribute('data-effort') && testId !== 'model-selector-effort-option')
+        || cur.hasAttribute('data-teamwork-frame')) return true;
+      if (testId === 'model-selector-trigger' || testId === 'model-selector-orchestrator-model') return true;
+      if (testId.startsWith('settings-nav-item-') && !KNOWN_SETTINGS_NAV_IDS.has(testId)) return true;
+      if (tag === 'NAV' && cur.getAttribute('aria-label') === 'File path breadcrumbs') return true;
+      if (hasClass(cur, 'text-muted-foreground')
+        && (hasClass(cur, 'line-clamp-2') || hasClass(cur, 'leading-relaxed'))
+        && typeof cur.closest === 'function'
+        && cur.closest('[data-testid="workspace-customizations-view"], [data-testid="customization-card"]')) return true;
+      const id = cur.getAttribute('id') || '';
+      if (id.startsWith('ag-pulse-status-bar') || id === 'usage-dashboard' || id === 'plugin-update-dialog') return true;
+      const uri = cur.getAttribute('data-uri') || '';
+      if (uri.startsWith('file:') || uri.startsWith('vscode-')) return true;
+    }
+    return false;
+  }
+
   function isImmutableElement(el) {
     if (!el || el.nodeType !== 1) return true;
     if (typeof el.closest === 'function') {
@@ -576,7 +607,7 @@ module.exports = function createHostI18n(options = {}) {
     if (typeof doc?.createTreeWalker === 'function') {
       const walker = doc.createTreeWalker(startEl, Filter.SHOW_ELEMENT, {
         acceptNode(node) {
-          return isImmutableElement(node) ? Filter.FILTER_REJECT : Filter.FILTER_ACCEPT;
+          return isOwnImmutableElement(node) ? Filter.FILTER_REJECT : Filter.FILTER_ACCEPT;
         },
       });
       for (let cur = walker.nextNode(); cur; cur = walker.nextNode()) {
@@ -587,7 +618,7 @@ module.exports = function createHostI18n(options = {}) {
     const stack = Array.from(startEl.children || []);
     while (stack.length) {
       const cur = stack.pop();
-      if (!cur || cur.nodeType !== 1 || isImmutableElement(cur)) continue;
+      if (!cur || cur.nodeType !== 1 || isOwnImmutableElement(cur)) continue;
       processSingleElement(cur);
       if (cur.children) {
         for (let i = cur.children.length - 1; i >= 0; i--) stack.push(cur.children[i]);
@@ -625,10 +656,42 @@ module.exports = function createHostI18n(options = {}) {
     nextElementPrune = PRUNE_MIN_REFS;
   }
 
+  const deferredElements = [];
+  let deferredFrame = null;
+  const canScheduleFrame = typeof win?.requestAnimationFrame === 'function';
+  const nowMs = () => (typeof performance !== 'undefined' && typeof performance.now === 'function' ? performance.now() : Date.now());
+
+  function clearDeferred() {
+    deferredElements.length = 0;
+    if (deferredFrame !== null && typeof win?.cancelAnimationFrame === 'function') {
+      win.cancelAnimationFrame(deferredFrame);
+    }
+    deferredFrame = null;
+  }
+
+  function drainDeferred() {
+    deferredFrame = null;
+    if (!enabled || !deferredElements.length) {
+      deferredElements.length = 0;
+      return;
+    }
+    const deadline = nowMs() + 6;
+    while (deferredElements.length) {
+      const el = deferredElements.shift();
+      if (el && el.isConnected !== false) processElementTree(el);
+      if (deferredElements.length && nowMs() >= deadline) {
+        deferredFrame = win.requestAnimationFrame(drainDeferred);
+        return;
+      }
+    }
+  }
+
   function handleMutations(records) {
     if (!enabled || !Array.isArray(records) || !records.length) return;
     const seenElements = new Set();
     const seenText = new Set();
+    const deadline = canScheduleFrame ? nowMs() + 8 : Infinity;
+    let elementsProcessed = 0;
     for (const record of records) {
       if (!record || !record.target) continue;
       if (record.type === 'characterData') {
@@ -655,10 +718,18 @@ module.exports = function createHostI18n(options = {}) {
             }
           } else if (added.nodeType === 1 && !parentEditable && !seenElements.has(added)) {
             seenElements.add(added);
-            processElementTree(added);
+            if (canScheduleFrame && elementsProcessed >= 32 && nowMs() >= deadline) {
+              if (deferredElements.length < 4096) deferredElements.push(added);
+            } else {
+              elementsProcessed++;
+              processElementTree(added);
+            }
           }
         }
       }
+    }
+    if (deferredElements.length && deferredFrame === null && canScheduleFrame) {
+      deferredFrame = win.requestAnimationFrame(drainDeferred);
     }
   }
 
@@ -675,6 +746,7 @@ module.exports = function createHostI18n(options = {}) {
   }
 
   function stopObserver() {
+    clearDeferred();
     if (!observer) return;
     try { observer.takeRecords?.(); } catch {}
     observer.disconnect();
