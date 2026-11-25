@@ -229,7 +229,9 @@ export class MetricsStore {
     let entry = this.sessions.get(id);
     if (entry?.pending) return entry.pending;
     const isSettledCached = Boolean(entry?.data?.status && settledStatus(entry.data.status) && (!entry.data.taskUsage || entry.data.taskUsage.state === 'ready'));
-    const sessionTtlMs = isSettledCached ? 5000 : 1800;
+    const largeSession = (entry?.data?.steps || 0) >= 1000;
+    const baseTtlMs = isSettledCached ? 5000 : largeSession ? 3000 : 1800;
+    const sessionTtlMs = Math.min(10000, Math.max(baseTtlMs, (entry?.lastReadMs || 0) * 3));
     if (!force && entry?.data && Date.now() - entry.updatedAt < sessionTtlMs && (entry.orchKey || '') === orchKey) return entry.data;
     entry ||= {};
     this.sessions.set(id, entry);
@@ -257,8 +259,11 @@ export class MetricsStore {
         this.startBackground(scope,id,entry,current);return entry.data||null;
       }
       const isSettled=Boolean(entry.data?.status&&settledStatus(entry.data.status)&&(!entry.data.taskUsage||entry.data.taskUsage.state==='ready'));
+      const readStartedAt = Date.now();
       const raw = await this.client.trajectory(id,{force,isCurrent:current,summaryTtlMs:isSettled?12000:1800});
+      const readElapsedMs = Math.max(0, Date.now() - readStartedAt);
       if (!current()) throw new Error('后台已重新连接，请等待刷新');
+      entry.lastReadMs = readElapsedMs;
       const rawStepsLen = raw?.trajectory?.steps?.length ?? 0;
       const rawGensLen = raw?.trajectory?.generatorMetadata?.length ?? 0;
       const rawStatus = raw?.status ?? null;

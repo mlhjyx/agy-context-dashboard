@@ -91,7 +91,9 @@ const fetchCachedRemoteMetrics = async (transport, remoteHost, endpoint, input) 
     const inflight = remoteMetricsInflight.get(cacheKey);
     if (inflight) return inflight;
   }
+  const startedAt = Date.now();
   const run = fetchRemoteMetrics(endpoint, input).then(res => {
+    const elapsedMs = Math.max(0, Date.now() - startedAt);
     if (res.ok && !input?.usageOnly) {
       if (input?.conversationId && !res.data?.speed && res.data?.sessionError) {
         const prev = recallGoodRemote(remoteHost, input.conversationId);
@@ -100,7 +102,7 @@ const fetchCachedRemoteMetrics = async (transport, remoteHost, endpoint, input) 
         }
       }
       const isRunning = /RUNNING/i.test(String(res.data?.speed?.status || ''));
-      const ttl = isRunning ? 3500 : 6000;
+      const ttl = Math.min(12000, Math.max(isRunning ? 3500 : 6000, elapsedMs * 3));
       remoteMetricsCache.set(cacheKey, { res, expiresAt: Date.now() + ttl });
       if (remoteMetricsCache.size > 16) remoteMetricsCache.delete(remoteMetricsCache.keys().next().value);
       rememberGoodRemote(remoteHost, input?.conversationId, res.data, transport);
@@ -251,10 +253,10 @@ const metrics = async input => {
         update,
       });
     }
-    if (settings.remoteRendererRpc !== false && input?.usageOnly !== true && typeof input?.fetchRemoteTrajectory === 'function' && input?.conversationId) {
+    if (settings.remoteRendererRpc === true && input?.usageOnly !== true && typeof input?.fetchRemoteTrajectory === 'function' && input?.conversationId) {
       const rpcKey = `${remoteHost.toLowerCase()}:${input.conversationId.toLowerCase()}`;
       const speed = await fetchThrottledRendererSpeed(rpcKey, input, orchestratorSettings, {
-        paginatedOnly: settings.remoteRendererRpc !== true,
+        paginatedOnly: settings.remoteRendererRpcMonolithic !== true,
       });
       if (speed) {
         const localBase = await store.snapshot({ conversationId: null, force: input?.force === true, quotaRefresh: input?.quotaRefresh === true, selectLatest: false, orchestratorSettings }).catch(() => null);
@@ -263,7 +265,7 @@ const metrics = async input => {
           localBase,
           remoteHost,
           liveComposerModel,
-          transport: settings.remoteRendererRpc === true ? 'renderer-rpc' : 'renderer-rpc-paginated',
+          transport: 'renderer-rpc-paginated',
           preferences: prefs,
           theme,
           orchestratorSettings,

@@ -141,3 +141,24 @@ test('MetricsStore shares listConversations summaries and uses 12s summary TTL f
  await store.session(cid);
  assert.equal(listCalls,2,'RUNNING session still rechecks summary after 1.8s');
 });
+
+test('ancient historical tool step lacking completedAt never rewinds incremental stepOffset across thousands of steps',async()=>{
+ const {client,state}=fixture();
+ state.steps=[
+  {type:'USER_INPUT',i:0},
+  {type:'CORTEX_STEP_TYPE_GENERIC',i:1,metadata:{createdAt:'2026-10-01T00:00:00Z',toolCall:{name:'old_cmd'}}},
+  ...Array.from({length:80},(_,k)=>({type:'PLANNER_RESPONSE',i:k+2})),
+  {type:'USER_INPUT',i:82},
+  {type:'PLANNER_RESPONSE',i:83},
+ ];
+ state.generators=[{stepIndices:[83]}];
+ state.summary=summary(state.steps.length,'CASCADE_RUN_STATUS_RUNNING');
+ await client.trajectory(id);
+ state.calls=[];
+ state.steps.push({type:'PLANNER_RESPONSE',i:84});
+ state.summary=summary(state.steps.length,'CASCADE_RUN_STATUS_RUNNING','v2');
+ await client.trajectory(id);
+ const firstStepCall=state.calls.find(([m])=>m==='GetCascadeTrajectorySteps');
+ assert.ok(firstStepCall,'should fetch incremental tail');
+ assert.ok(firstStepCall[1].stepOffset>=83,`must not rewind back to ancient step 1 (got offset=${firstStepCall[1].stepOffset})`);
+});

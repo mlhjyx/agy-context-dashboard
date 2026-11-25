@@ -124,9 +124,26 @@ export class TrajectoryReader {
      stepOffset=associated.length?Math.min(...associated):old.trajectory.steps.length;
     }
     // Background tools can finish after newer model requests have started.
-    // Refresh from the earliest unresolved timed tool as well as the last model.
-    const pendingTool=old.trajectory.steps.findIndex(s=>s?.metadata&&(s.metadata.startedAt||s.metadata.createdAt)&&!s.metadata.completedAt&&
-     (/SEARCH_WEB|BROWSE|RUN_COMMAND|COMMAND|READ|WRITE|EDIT|CODE_ACTION|TOOL|MCP|LIST|GREP|VIEW|FIND|TERMINAL|INVOKE_SUBAGENT/i.test(String(s.type||''))||s.metadata.toolCall));
+    // Refresh from the earliest unresolved timed tool within the recent active
+    // tail only; never rewind thousands of steps back to an ancient historical
+    // step lacking completedAt (which would re-download the entire conversation
+    // every poll and starve the host language server).
+    const terminalStep=s=>/DONE|COMPLETED|CANCELLED|CANCELED|ERROR|FAILED|SKIPPED/i.test(String(s?.status||''));
+    const pendingScanStart=Math.max(0,lastInput>=0?lastInput+1:0,old.trajectory.steps.length-64);
+    const nowMs=this.client.now();
+    let pendingTool=-1;
+    for(let idx=pendingScanStart;idx<old.trajectory.steps.length;idx++){
+     const s=old.trajectory.steps[idx];
+     if(!s?.metadata||s.metadata.completedAt||terminalStep(s))continue;
+     const stamp=s.metadata.startedAt||s.metadata.createdAt;
+     if(!stamp)continue;
+     if(!(/SEARCH_WEB|BROWSE|RUN_COMMAND|COMMAND|READ|WRITE|EDIT|CODE_ACTION|TOOL|MCP|LIST|GREP|VIEW|FIND|TERMINAL|INVOKE_SUBAGENT/i.test(String(s.type||''))||s.metadata.toolCall))continue;
+     if(nowMs>1e12){
+      const parsedTs=Date.parse(stamp);
+      if(Number.isFinite(parsedTs)&&nowMs-parsedTs>15*60*1000)continue;
+     }
+     pendingTool=idx;break;
+    }
     if(pendingTool>=0)stepOffset=Math.min(stepOffset,pendingTool);
     if(gs.some(g=>!Array.isArray(g.stepIndices)||!g.stepIndices.length))metadataOffset=0;
    }

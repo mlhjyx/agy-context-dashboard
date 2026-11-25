@@ -169,7 +169,7 @@ export class DelegatedUsage {
           ? JSON.stringify([summary.stepCount??null,summary.lastModifiedTime,summary.status,summary.lastUserInputStepIndex??null])
           : null;
         const prevMark=task.childMarks?.get(id);
-        if(!force&&summaryMark&&task.sources.has(id)&&!task.staleSources.has(id)&&!failure&&prevMark&&prevMark.mark===summaryMark&&this.now()-prevMark.checkedAt<this.settledChildRefreshMs){
+        if(!force&&summaryMark&&task.sources.has(id)&&!failure&&prevMark&&prevMark.mark===summaryMark&&this.now()-prevMark.checkedAt<this.settledChildRefreshMs){
           continue;
         }
         task.attempted.set(id,++task.order);
