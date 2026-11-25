@@ -118,10 +118,20 @@ export class TrajectoryReader {
     // so a large corpus is not downloaded on each generation-state refresh.
     stepOffset=lastInput<0?0:lastInput+1;
     const gs=old.trajectory.generatorMetadata;
-    if(gs.length&&gs.every(g=>Array.isArray(g.stepIndices)&&g.stepIndices.length&&g.stepIndices.every(i=>Number.isInteger(i)&&i>=0))){
-     metadataOffset=Math.max(0,gs.length-1);
-     const associated=(gs.at(-1)?.stepIndices||[]).filter(i=>Number.isInteger(i)&&i>=0&&i<old.trajectory.steps.length&&!/USER_INPUT/.test(String(old.trajectory.steps[i]?.type||'')));
-     stepOffset=associated.length?Math.min(...associated):old.trajectory.steps.length;
+    if(gs.length){
+     const tailStart=Math.max(0,gs.length-8);
+     const validIndices=g=>Array.isArray(g?.stepIndices)&&g.stepIndices.length&&g.stepIndices.every(i=>Number.isInteger(i)&&i>=0);
+     const lastG=gs.at(-1);
+     if(validIndices(lastG)){
+      metadataOffset=Math.max(0,gs.length-1);
+      const associated=lastG.stepIndices.filter(i=>i<old.trajectory.steps.length&&!/USER_INPUT/.test(String(old.trajectory.steps[i]?.type||'')));
+      stepOffset=associated.length?Math.min(...associated):old.trajectory.steps.length;
+     }else{
+      metadataOffset=tailStart;
+     }
+     for(let idx=tailStart;idx<gs.length;idx++){
+      if(!validIndices(gs[idx])){metadataOffset=Math.min(metadataOffset,idx);break;}
+     }
     }
     // Background tools can finish after newer model requests have started.
     // Refresh from the earliest unresolved timed tool within the recent active
@@ -145,7 +155,6 @@ export class TrajectoryReader {
      pendingTool=idx;break;
     }
     if(pendingTool>=0)stepOffset=Math.min(stepOffset,pendingTool);
-    if(gs.some(g=>!Array.isArray(g.stepIndices)||!g.stepIndices.length))metadataOffset=0;
    }
    const steps=incremental?old.trajectory.steps.slice(0,stepOffset):[];
    const generators=incremental?old.trajectory.generatorMetadata.slice(0,metadataOffset):[];

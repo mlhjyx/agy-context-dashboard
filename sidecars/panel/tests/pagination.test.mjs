@@ -162,3 +162,21 @@ test('ancient historical tool step lacking completedAt never rewinds incremental
  assert.ok(firstStepCall,'should fetch incremental tail');
  assert.ok(firstStepCall[1].stepOffset>=83,`must not rewind back to ancient step 1 (got offset=${firstStepCall[1].stepOffset})`);
 });
+
+test('ancient generatorMetadata entry lacking stepIndices never rewinds metadataOffset to 0 on large conversations',async()=>{
+ const {client,state}=fixture();
+ state.steps=Array.from({length:30},(_,i)=>({type:i%3===0?'USER_INPUT':'PLANNER_RESPONSE',i}));
+ state.generators=[
+  {i:0}, // historical entry with missing stepIndices far behind the tail
+  ...Array.from({length:12},(_,k)=>({i:k+1,stepIndices:[k*2+2]})),
+ ];
+ state.summary=summary(state.steps.length,'CASCADE_RUN_STATUS_RUNNING');
+ await client.trajectory(id);
+ state.calls=[];
+ state.steps.push({type:'PLANNER_RESPONSE',i:30});
+ state.summary=summary(state.steps.length,'CASCADE_RUN_STATUS_RUNNING','v2');
+ await client.trajectory(id);
+ const firstMeta=state.calls.find(([m])=>m==='GetCascadeTrajectoryGeneratorMetadata');
+ assert.ok(firstMeta);
+ assert.equal(firstMeta[1].generatorMetadataOffset,12,'must only revalidate the tail, not rewind to 0');
+});
