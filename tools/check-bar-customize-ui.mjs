@@ -67,7 +67,7 @@ const server = createServer(async (req, res) => {
 await new Promise(r => server.listen(0, '127.0.0.1', r));
 const base = `http://127.0.0.1:${server.address().port}`;
 const { chromium } = await import(process.env.PLAYWRIGHT_MODULE ? pathToFileURL(process.env.PLAYWRIGHT_MODULE).href : 'playwright');
-const browser = await chromium.launch(process.platform === 'win32' && !process.env.CI ? { channel: 'msedge', headless: true } : { headless: true });
+const browser = await chromium.launch(process.platform === 'win32' && !process.env.CI ? { channel: 'msedge', headless: true } : { headless: true, ...(process.env.PLAYWRIGHT_EXECUTABLE_PATH ? { executablePath: process.env.PLAYWRIGHT_EXECUTABLE_PATH } : {}) });
 const errors = [];
 
 try {
@@ -77,6 +77,7 @@ try {
   const s = page.locator('#ag-pulse-status-bar');
   await s.waitFor();
   await s.locator('[data-card=context]').waitFor({ state: 'visible' });
+  await s.locator('#context-rounds').waitFor({ state: 'visible' });
 
   const chipOrder = () => s.locator('.bar > [data-card]').evaluateAll(els => els.map(e => e.dataset.card));
   const visibleChips = () => s.locator('.bar > [data-card]').evaluateAll(els => els.filter(e => !e.hidden).map(e => e.dataset.card));
@@ -86,11 +87,55 @@ try {
   assert.equal(await s.locator('#context-rounds').isVisible(), true);
   assert.equal(await s.locator('[data-card=context] .context-label').isVisible(), false);
 
-  // Open Context card and toggle customize drawer
+  // Open Context card and click Settings button to open non-modal anchored Settings popover above the bar
   await s.locator('[data-card=context]').click();
-  await s.locator('#bar-customize-toggle').click();
-  await s.locator('#bar-customize-drawer').waitFor({ state: 'visible' });
-  assert.equal(await s.locator('#bar-customize-toggle').getAttribute('aria-expanded'), 'true');
+  await s.locator('#pulse-settings-toggle').click();
+  await s.locator('#pulse-settings-dialog').waitFor({ state: 'visible' });
+  assert.equal(await s.locator('#pulse-settings-dialog').getAttribute('data-open'), 'true');
+  assert.equal(await s.locator('#pulse-settings-dialog').getAttribute('aria-modal'), 'false');
+  const box = await s.locator('#pulse-settings-dialog').boundingBox();
+  const barBox = await s.locator('.bar').boundingBox();
+  assert.ok(box && barBox && box.y + box.height <= barBox.y + 1, `settings panel (${box?.y}+${box?.height}) must stay above bar (${barBox?.y}) without covering it`);
+
+  // Verify bar stays transparent by default (no outer capsule) and context ring renders visibly before/during/after customization
+  const initialBarBg = await s.locator('.bar').evaluate(el => getComputedStyle(el).backgroundColor);
+  const initialBarBorder = await s.locator('.bar').evaluate(el => getComputedStyle(el).borderTopWidth);
+  const initialCtxRingBg = await s.locator('#context-ring').evaluate(el => getComputedStyle(el).backgroundImage);
+  assert.equal(initialBarBg, 'rgba(0, 0, 0, 0)');
+  assert.equal(initialBarBorder, '0px');
+  assert.match(initialCtxRingBg, /^conic-gradient\(/);
+
+  await s.locator('[data-bar-color-slot=speed][data-bar-color-preset="#7c3aed"]').click();
+  await page.waitForFunction(() => getComputedStyle(document.getElementById('ag-pulse-status-bar')).getPropertyValue('--pulse-bar-speed') !== '');
+  const customLightSpeed = await s.locator('#tps').evaluate(el => getComputedStyle(el).color);
+  await s.locator('[data-bar-color-picker=token]').fill('#d97706');
+  await page.waitForFunction(() => getComputedStyle(document.getElementById('ag-pulse-status-bar')).getPropertyValue('--pulse-bar-token') !== '');
+  await s.locator('[data-bar-color-slot=quota][data-bar-color-preset="#0284c7"]').click();
+  await s.locator('[data-bar-color-slot=context][data-bar-color-preset="#16a34a"]').click();
+  await page.waitForFunction(() => getComputedStyle(document.getElementById('ag-pulse-status-bar')).getPropertyValue('--pulse-bar-context') !== '');
+  const customCtxRingBg = await s.locator('#context-ring').evaluate(el => getComputedStyle(el).backgroundImage);
+  assert.match(customCtxRingBg, /^conic-gradient\(/);
+  assert.notEqual(customCtxRingBg, initialCtxRingBg);
+  await page.waitForTimeout(100);
+  assert.deepEqual(prefs.barColors, { speed: '#7c3aed', token: '#d97706', quota: '#0284c7', context: '#16a34a' });
+
+  await s.locator('[data-theme-mode-choice=dark]').click();
+  assert.equal(await s.getAttribute('data-pulse-theme'), 'dark');
+  await page.waitForFunction(() => getComputedStyle(document.getElementById('ag-pulse-status-bar')).getPropertyValue('--pulse-bar-speed') !== '');
+  const customDarkSpeed = await s.locator('#tps').evaluate(el => getComputedStyle(el).color);
+  assert.notEqual(customLightSpeed, customDarkSpeed);
+  assert.equal(await s.locator('.bar').evaluate(el => getComputedStyle(el).backgroundColor), 'rgba(0, 0, 0, 0)');
+  await page.waitForTimeout(80);
+  assert.equal(prefs.themeMode, 'dark');
+
+  await s.locator('[data-bar-color-default=speed]').click();
+  await page.waitForFunction(() => getComputedStyle(document.getElementById('ag-pulse-status-bar')).getPropertyValue('--pulse-bar-speed') === '');
+  await page.waitForTimeout(80);
+  assert.equal(prefs.barColors.speed, undefined);
+  await s.locator('[data-cache-hit-tone-choice=semantic]').click();
+  assert.equal(await s.getAttribute('data-cache-hit-tone'), 'semantic');
+  await page.waitForTimeout(80);
+  assert.equal(prefs.cacheHitTone, 'semantic');
 
   // Switch Context ring secondary label: rounds -> label -> compact -> rounds
   await s.locator('[data-ctx-chip-mode=label]').click();
@@ -120,18 +165,47 @@ try {
   await s.locator('[data-bar-row=speed] .bar-switch').click();
   await s.locator('[data-bar-row=context] .bar-switch').click();
   assert.deepEqual(await visibleChips(), ['speed']);
-  await s.locator('#speed-card #bar-customize-toggle').waitFor({ state: 'visible' });
-  await s.locator('#speed-card #bar-migrate-note').waitFor({ state: 'visible' });
+  await s.locator('#pulse-settings-close').click();
+  await s.locator('[data-card=speed]').click();
+  await s.locator('#speed-card #pulse-settings-toggle').waitFor({ state: 'visible' });
 
-  // Reset restores default order, all 4 visible chips, and footer back to #context-card
+  // Test Back button returns directly from Settings to Context card, and click outside closes Settings
+  await s.locator('#speed-card #pulse-settings-toggle').click();
   await s.locator('#bar-customize-reset').click();
   assert.deepEqual(await chipOrder(), ['speed', 'cache', 'quota', 'context']);
   assert.deepEqual(await visibleChips(), ['speed', 'cache', 'quota', 'context']);
-  await s.locator('#context-card #bar-customize-toggle').waitFor({ state: 'visible' });
-  assert.equal(await s.locator('#bar-migrate-note').isVisible(), false);
+  assert.deepEqual(prefs.barColors, {});
+  assert.equal(prefs.themeMode, 'auto');
+  assert.equal(prefs.cacheHitTone, 'accent');
+  assert.match(await s.locator('#context-ring').evaluate(el => getComputedStyle(el).backgroundImage), /^conic-gradient\(/);
+  await s.locator('#pulse-settings-back').click();
+  await s.locator('#context-card #pulse-settings-toggle').waitFor({ state: 'visible' });
+  assert.equal(await s.locator('#pulse-settings-dialog').isVisible(), false);
+
+  // Verify quota ring card does not render a duplicate Settings button when context is visible
+  await s.locator('[data-card=quota]').click();
+  await s.locator('#quota-card').waitFor({ state: 'visible' });
+  assert.equal(await s.locator('#quota-card #quota-settings-toggle').count(), 0);
+  assert.equal(await s.locator('#quota-card #pulse-settings-toggle').count(), 0);
+
+  // Verify #cache-card inline hit-rate quick toggle stays visible and syncs bidirectionally with Settings
+  await s.locator('[data-card=cache]').click();
+  await s.locator('#cache-inline-hit-row').waitFor({ state: 'visible' });
+  assert.equal(await s.locator('#cache-hit').isVisible(), true);
+  await s.locator('#cache-card-hit-off').click();
+  await page.waitForFunction(() => document.getElementById('ag-pulse-status-bar')?.getAttribute('data-inline-cache-hit') === 'false');
+  assert.equal(await s.locator('#cache-hit').isVisible(), false);
+  await s.locator('[data-card=context]').click();
+  await s.locator('#pulse-settings-toggle').click();
+  await s.locator('#pulse-settings-dialog').waitFor({ state: 'visible' });
+  assert.equal(await s.locator('#pulse-settings-dialog [data-inline-cache-hit-choice=false]').getAttribute('aria-pressed'), 'true');
+  await s.locator('#pulse-settings-dialog [data-inline-cache-hit-choice=true]').click();
+  await page.waitForFunction(() => document.getElementById('ag-pulse-status-bar')?.getAttribute('data-inline-cache-hit') === 'true');
+  assert.equal(await s.locator('#cache-hit').isVisible(), true);
+  assert.equal(await s.locator('#cache-card-hit-on').getAttribute('aria-pressed'), 'true');
 
   assert.deepEqual(errors, []);
-  console.log(JSON.stringify({ barCustomizeUi: true, reorder: true, labelModes: true, keepOneGuard: true, footerMigration: true, reset: true, pageErrors: [] }));
+  console.log(JSON.stringify({ barCustomizeUi: true, reorder: true, labelModes: true, keepOneGuard: true, footerMigration: true, reset: true, cacheHitQuickSync: true, pageErrors: [] }));
 } finally {
   await browser.close();
   server.closeAllConnections?.();

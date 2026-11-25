@@ -322,6 +322,7 @@ const sessionInsights = async input => {
     status: ['all', 'active', 'archived'].includes(input?.status) ? input.status : 'all',
     sort: ['recent', 'tokens', 'context', 'cost'].includes(input?.sort) ? input.sort : 'recent',
     query: typeof input?.query === 'string' ? input.query.slice(0, 80) : '',
+    date: typeof input?.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(input.date) ? input.date : '',
   });
 };
 const usageSource=()=>{const s=readFileSync(join(HERE,'..','..','compat','usage-ui.cjs'),'utf8');return `window.__agPulseUsageFactory=(${s.slice(s.indexOf('module.exports = ')+17).trim().replace(/;$/,'')});`;};
@@ -447,7 +448,7 @@ if (process.env.ANTIGRAVITY_SIDECAR_WEB_PORT) {
   app.api('/theme.css',()=>new Response(themeCss(),{contentType:'text/css'}),'GET');
   app.api('/api/metrics', data => metrics({ conversationId: data.conversationId || null, force: data.force === true || data.force === '1', quotaRefresh: data.quotaRefresh === true || data.quotaRefresh === '1', ...(data.contextDetail === true || data.contextDetail === '1' ? { contextDetail: true } : {}), ...(data.usageSync === true || data.usageSync === '1' ? { usageSync: true } : {}), ...(data.usageOnly === true || data.usageOnly === '1' ? { usageOnly: true } : {}), ...(data.usageScope === 'local' || data.usageScope === 'account' ? { usageScope: data.usageScope } : {}) }), 'GET');
   app.api('/api/session-audit', data => sessionAudit({ conversationId: data.conversationId || null, force: data.force === true || data.force === '1' }), 'GET');
-  app.api('/api/insights', data => sessionInsights({ force: data.force === true || data.force === '1', status: data.status, sort: data.sort, query: data.query }), 'GET');
+  app.api('/api/insights', data => sessionInsights({ force: data.force === true || data.force === '1', status: data.status, sort: data.sort, query: data.query, date: data.date }), 'GET');
   app.api('/api/integration', () => integration.health, 'GET');
   app.api('/api/preferences',()=>preferences.snapshot(),'GET');
   app.api('/api/preferences',async data=>{try{const saved=await preferences.set(data);void integration.pushPreferences?.(saved);return saved;}catch{return new Response(JSON.stringify({error:'Language preference could not be saved'}),{status:400,contentType:'application/json'});}},'POST');
@@ -562,6 +563,7 @@ if (process.env.ANTIGRAVITY_SIDECAR_WEB_PORT) {
           status: url.searchParams.get('status') || 'all',
           sort: url.searchParams.get('sort') || 'recent',
           query: url.searchParams.get('query') || '',
+          date: url.searchParams.get('date') || '',
         });
         res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
         res.end(JSON.stringify(result));

@@ -171,3 +171,20 @@ test('autoRelaunchDebug is omitted when unset, validates booleans, and persists 
   await writeFile(file,JSON.stringify({schema:1,language:'en',autoRelaunchDebug:'yes',revision:5}));
   assert.equal(Object.hasOwn(await store.get(),'autoRelaunchDebug'),false);
 });
+
+test('stripMode persists independently, defaults to full and validates choices',async t=>{
+  const {file,store}=await fixture(t);
+  const language=create(null);assert.equal(language.normalizeStripMode(undefined),'full');assert.equal(language.normalizeStripMode('minimal'),'minimal');assert.equal(language.normalizeStripMode('bad'),'full');
+  await store.set({stripMode:'minimal'});
+  let saved=await new PreferencesStore({file}).get();assert.equal(saved.stripMode,'minimal');assert.equal(saved.language,null);
+  await store.set({language:'zh-CN'});await store.set({stripMode:'full'});
+  saved=await new PreferencesStore({file}).get();assert.equal(saved.stripMode,'full');assert.equal(saved.language,'zh-CN');
+  for(const bad of [{stripMode:'compact'},{stripMode:null},{stripMode:''},{stripMode:'minimal',extra:'x'}])await assert.rejects(store.set(bad));
+  let revision=1,fail=false;
+  const ctrl=language.connectStripMode({initial:'minimal',write:async input=>{if(fail)throw Error('io');return {language:null,stripMode:input.stripMode,revision:++revision};}});
+  assert.equal(ctrl.mode,'minimal');
+  await ctrl.choose('full');assert.equal(ctrl.mode,'full');assert.equal(ctrl.error,false);
+  ctrl.sync({language:null,stripMode:'minimal',revision:1});assert.equal(ctrl.mode,'full');
+  fail=true;await ctrl.choose('minimal');assert.equal(ctrl.mode,'minimal');assert.equal(ctrl.error,true);
+  ctrl.dispose();
+});

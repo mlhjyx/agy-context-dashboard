@@ -31,7 +31,7 @@ module.exports = function createDashboardI18n(initialLanguage) {
       creditsLabel:'Credits',creditsPrompt:'Prompt credits',creditsFlow:'Flow credits',creditsBadge:'{prompt}P · {flow}F',estimatedCostLabel:'Estimated cost',estimatedBadge:'Estimated',estimatedCostTitle:'Approximate public pricing estimate; not an official invoice.',
       insightsAll:'All',insightsActive:'Active',insightsArchived:'Archived',insightsSortRecent:'Recent',insightsSortTokens:'Total tokens',insightsSortContext:'Context size',insightsSortCost:'Estimated cost',insightsSearchPlaceholder:'Filter sessions…',insightsScan:'Rescan',insightsScanning:'Scanning local sessions…',
       insightsKpiSessions:'Sessions',insightsKpiSessionsSub:'{active} active · {archived} archived',insightsKpiTokens:'Total tokens',insightsKpiRoundsSub:'{n} turns',insightsKpiCost:'Est. cost',insightsKpiPricedSub:'priced {priced}/{total}',insightsKpiCache:'Cache hit',insightsKpiTools:'Tool calls',insightsKpiDuration:'Active time',insightsKpiCallsSub:'{n} model calls',
-      insights7dTitle:'Last 7 days',insightsHeatmapTitle:'Activity heatmap',insightsHeatmapSessions:'Sessions',insightsHeatmapTokens:'Tokens',insightsCompTitle:'Token composition',insightsProjects:'Projects',insightsSkills:'Skills loaded',insightsTools:'Tools invoked',insightsCommands:'Commands run',insightsSessionsTitle:'Sessions ({n})',insightsEmpty:'No local sessions found.',insightsCacheMeta:'{total} sessions · {ms}ms',
+      insights7dTitle:'Last 7 days',insightsHeatmapTitle:'Activity heatmap',insightsHeatmapSessions:'Sessions',insightsHeatmapTokens:'Tokens',insightsHeatmapLess:'Less',insightsHeatmapMore:'More',insightsHeatmapSummary:'Active {days}d · Streak {streak}d · Peak {peak}',insightsHeatmapPeakSessions:'{n} sess',insightsHeatmapTip:'{date} · {sessions} sess · {tokens} tok',insightsHeatmapClearDate:'{date} ×',insightsEmptyDate:'No sessions recorded on {date}.',insightsWeekdays:'M,,W,,F,,',insightsCompTitle:'Token composition',insightsProjects:'Projects',insightsSkills:'Skills loaded',insightsTools:'Tools invoked',insightsCommands:'Commands run',insightsSessionsTitle:'Sessions ({n})',insightsEmpty:'No local sessions found.',insightsCacheMeta:'{total} sessions · {ms}ms',
       savedStats:'Showing saved conversation statistics ({time}).',saveFailed:'Statistics could not be saved locally.',
       strip:'Antigrative Dashboard statistics',session:'Session statistics',cache:'Cache hit',cacheTitle:'Token usage',five:'Five-hour quota',week:'Weekly quota',weekShort:'Wk',
       modelTime:'Model time',toolTime:'Tool time',ttft:'Session P50 TTFT',ttftShort:'TTFT (P50 / Last)',ttftBasis:'TTFT (first streamed/thinking token, not first answer token) · Session P50: {p50} · Latest: {latest}',latestSpeed:'Latest decode',latestSpeedTip:'Streaming decode speed of the latest qualified request (total output including thinking ÷ streaming time; excludes < 1s or < 30 output token short windows).',sessionAvg:'Session decode',e2eSpeed:'E2E speed',e2eShort:'E2E',e2eBasis:'End-to-end effective speed: total output tokens ÷ (TTFT + streaming time) across qualified requests.',peakSpeed:'Peak decode',peakBasis:'Peak streaming decode speed across qualified requests (excludes < 1s or < 30 output token bursts).',basisShortResponse:'Response only',basisShortAll:'Output + thinking',sessionTps:'Session decode TPS',latest:'Last request',tokens:'Response / thinking',remaining:'remaining',
@@ -64,7 +64,9 @@ module.exports = function createDashboardI18n(initialLanguage) {
       orchSplitTitle:'Orchestrator split',orchCardTitle:'Orchestrator · Single-session split',orchScopeHint:'Same session · Planner switches to Executor',orchSwitchCount:'{n}× switch',orchReadOnlyTag:'Plan only',swarmScopeHint:'Multi-session team · Independent worker chats',orchRolePlanner:'Planner',orchRoleExecutor:'Executor',orchConfiguredPair:'Configured: {planner} → {executor}',orchNoSwitchYet:'Read-only turn · no switch yet',orchColdStartNote:'{n}× switch cache cold-start',orchColdStartLabel:'Switch cold-starts',orchColdStartTip:'First request after switching to Executor had 0 cached tokens (different models do not share KV cache)',cacheMissSurgeLabel:'Large cache-miss surge',cacheMissSurgeTip:'Requests with 0 cached tokens and >= 100K uncached input (e.g. after compaction, model switch, or cache expiry)',reqCountShort:'{n} req',countTimes:'{n}×',
       insightsProjectsSubtotal:'{n} projects · {tokens} toks',insightsSkillsSubtotal:'{n} skills · {runs} runs',insightsToolsSubtotal:'{n} tools · {calls} calls',insightsCommandsSubtotal:'{n} cmds · {runs} runs',insightsUnitSessions:'{n} sess',insightsUnitRuns:'{n} runs',insightsUnitCalls:'{n} calls',
       barCustomize:'Customize',barCustomizeTitle:'Customize status bar',barReset:'Reset',barContextChipMode:'Context ring label',barContextModeRounds:'Turns',barContextModeLabel:'Label',barContextModeCompact:'Compact',barOrderLabel:'Visible chips & order',barKeepOneHint:'Keep at least 1 chip visible',barSaveFailed:'Status bar setting could not be saved. Try again.',barMoveUp:'Move up',barMoveDown:'Move down',barChipSpeed:'Speed',barChipCache:'Cache',barChipQuota:'Quota',barChipContext:'Context',barFooterMigrated:'Context chip is hidden — settings moved here so you can restore it anytime.',
+      pulseSettings:'Settings',pulseSettingsTitle:'Antigravity Pulse Settings',pulseSettingsSubtitle:'Bar colors · Appearance · Status bar modules',settingsSectionTheme:'Bar Colors & Appearance',settingsSectionBar:'Status Bar Modules',settingsSectionGeneral:'Display & Language',settingsMode:'Appearance',modeAuto:'Auto',modeLight:'Light',modeDark:'Dark',themeModeSaveFailed:'Appearance mode could not be saved. Try again.',barColorSpeed:'Speed (tok/s)',barColorToken:'Tokens',barColorQuota:'Quota ring',barColorContext:'Context ring',barColorDefault:'Default',barColorPick:'Custom color',barColorsSaveFailed:'Bar color could not be saved. Try again.',cacheHitToneLabel:'High hit-rate color (≥70%)',cacheHitToneAccent:'Accent (Blue)',cacheHitToneSemantic:'Green (≥70%)',cacheHitToneHint:'Hit tiers: ≥70% High (Accent or Green) · 30–69% Amber · <30% Muted',cacheHitToneSaveFailed:'Color setting could not be saved. Try again.',settingsBack:'Back',settingsClose:'Close',
       remoteFallbackUnconfigured:'Remote SSH ({host}): inline bar shows shared quota only. Open Antigrative Dashboard in the right sidebar for remote session stats, or configure SSH port forwarding in settings.json.',remoteFallbackUnreachable:'Remote SSH ({host}): remote bridge unreachable — showing shared quota only. Check SSH port forwarding or use the right sidebar.',remoteConnectedBadge:'SSH · {host}',remoteQuotaTitle:'Remote SSH ({host}) · Shared quota',
+      stripMode:'Inline bar display',stripFull:'Full bar',stripMinimal:'Minimal bar',stripCollapse:'Collapse to minimal bar',stripExpand:'Expand full bar',stripModeSaveFailed:'Display mode could not be saved. Try again.',
     },
     'zh-CN':{
       collectionBackgroundFailed:'后台暂时无法完成，稍后会自动重试。',collectionProcessing:'正在补全统计',collectionProcessingReason:'后台处理中，可继续使用。',collectionProgress:'查看进度',collectionProgressCounts:'已处理 {steps} 个步骤 · {requests} 条请求记录',collectionQueued:'等待处理',collectionSteps:'读取步骤',collectionGenerators:'读取请求记录',collectionReducing:'计算统计',collectionPublishing:'保存已校验统计',
@@ -96,7 +98,7 @@ module.exports = function createDashboardI18n(initialLanguage) {
       creditsLabel:'Credits',creditsPrompt:'Prompt 额度',creditsFlow:'Flow 额度',creditsBadge:'{prompt}P · {flow}F',estimatedCostLabel:'预估费用',estimatedBadge:'估算',estimatedCostTitle:'按公开参考单价估算，非官方账单。',
       insightsAll:'全部',insightsActive:'活跃',insightsArchived:'已归档',insightsSortRecent:'最近更新',insightsSortTokens:'Token 总量',insightsSortContext:'当前上下文',insightsSortCost:'预估费用',insightsSearchPlaceholder:'搜索会话…',insightsScan:'重新扫描',insightsScanning:'正在扫描本地会话…',
       insightsKpiSessions:'全部会话',insightsKpiSessionsSub:'{active} 活跃 · {archived} 归档',insightsKpiTokens:'Token 消耗',insightsKpiRoundsSub:'{n} 轮对话',insightsKpiCost:'预估费用',insightsKpiPricedSub:'已计价 {priced}/{total}',insightsKpiCache:'缓存命中率',insightsKpiTools:'工具调用',insightsKpiDuration:'活跃时长',insightsKpiCallsSub:'{n} 次模型调用',
-      insights7dTitle:'近 7 天用量',insightsHeatmapTitle:'活跃度热力图',insightsHeatmapSessions:'会话数',insightsHeatmapTokens:'Token',insightsCompTitle:'Token 构成',insightsProjects:'项目分布',insightsSkills:'技能加载',insightsTools:'工具调用',insightsCommands:'命令执行',insightsSessionsTitle:'会话列表（{n}）',insightsEmpty:'未发现本地会话日志。',insightsCacheMeta:'{total} 个会话 · {ms}ms',
+      insights7dTitle:'近 7 天用量',insightsHeatmapTitle:'活跃度热力图',insightsHeatmapSessions:'会话数',insightsHeatmapTokens:'Token',insightsHeatmapLess:'少',insightsHeatmapMore:'多',insightsHeatmapSummary:'活跃 {days} 天 · 连续 {streak} 天 · 峰值 {peak}',insightsHeatmapPeakSessions:'{n} 会话',insightsHeatmapTip:'{date} · {sessions} 会话 · {tokens} tok',insightsHeatmapClearDate:'{date} ×',insightsEmptyDate:'{date} 当日暂无会话记录。',insightsWeekdays:'一,,三,,五,,',insightsCompTitle:'Token 构成',insightsProjects:'项目分布',insightsSkills:'技能加载',insightsTools:'工具调用',insightsCommands:'命令执行',insightsSessionsTitle:'会话列表（{n}）',insightsEmpty:'未发现本地会话日志。',insightsCacheMeta:'{total} 个会话 · {ms}ms',
       savedStats:'显示已保存的会话统计（{time}）。',saveFailed:'统计暂时无法保存到本地。',
       strip:'Antigrative Dashboard 会话与额度状态条',session:'会话统计',cache:'缓存命中',cacheTitle:'Token 用量',five:'5h 额度',week:'周额度',weekShort:'周',
       modelTime:'模型调用用时',toolTime:'工具调用用时',ttft:'首字延迟 P50 (TTFT)',ttftShort:'首字 (P50 / 最新)',ttftBasis:'首字延迟 TTFT（到首个流式/思考 Token，非正文首字）· 会话 P50：{p50} · 最新：{latest}',latestSpeed:'最新解码',latestSpeedTip:'最近一条合格请求的纯流式解码速度（总输出含思考 ÷ 流式时长；已隔离 < 1s 或 < 30 输出 Token 的短窗口样本）。',sessionAvg:'会话解码',e2eSpeed:'端到端速率',e2eShort:'端到端',e2eBasis:'端到端有效速率：合格请求总输出 Token ÷（首字延迟 + 流式时长），反映计入等待后的综合效率。',peakSpeed:'解码峰值',peakBasis:'合格样本中的纯流式解码峰值（已隔离 < 1s 或 < 30 输出 Token 的短窗口突发）。',basisShortResponse:'仅正文输出',basisShortAll:'总输出（含思考）',sessionTps:'会话解码速率（TPS）',latest:'最近一次请求',tokens:'正文 / 思考输出',remaining:'剩余',
@@ -126,7 +128,9 @@ module.exports = function createDashboardI18n(initialLanguage) {
       orchSplitTitle:'Orchestrator 主/执行分工',orchCardTitle:'Orchestrator · 单会话双模型',orchScopeHint:'同一会话内 · 规划与执行切模型',orchSwitchCount:'切换 {n} 次',orchReadOnlyTag:'仅规划',swarmScopeHint:'多会话并行团队 · 主协调与各成员独立对话',orchRolePlanner:'主调度',orchRoleExecutor:'干活执行',orchConfiguredPair:'已配组合：{planner} → {executor}',orchNoSwitchYet:'仅规划/只读 · 尚未切执行模型',orchColdStartNote:'切模型冷缓存 {n} 次',orchColdStartLabel:'切模型冷缓存',orchColdStartTip:'切到执行模型后首步缓存读为 0（不同模型不共享 KV 缓存，需重新计算上下文）',cacheMissSurgeLabel:'大额冷缓存',cacheMissSurgeTip:'单次请求缓存读为 0 且未缓存输入 ≥ 100K 的次数与累计量（常见于压缩、切模型或缓存过期后重算）',reqCountShort:'{n} 次请求',countTimes:'{n} 次',
       insightsProjectsSubtotal:'{n} 项目 · {tokens} toks',insightsSkillsSubtotal:'{n} 技能 · {runs} 次',insightsToolsSubtotal:'{n} 工具 · {calls} 次',insightsCommandsSubtotal:'{n} 命令 · {runs} 次',insightsUnitSessions:'{n} 会话',insightsUnitRuns:'{n} 次',insightsUnitCalls:'{n} 次',
       barCustomize:'自定义',barCustomizeTitle:'状态栏自定义',barReset:'恢复默认',barContextChipMode:'上下文圆环副文案',barContextModeRounds:'轮数',barContextModeLabel:'标签',barContextModeCompact:'极简',barOrderLabel:'显示项与顺序',barKeepOneHint:'至少保留 1 个状态栏入口',barSaveFailed:'状态栏设置暂时无法保存，请重试。',barMoveUp:'上移',barMoveDown:'下移',barChipSpeed:'速度',barChipCache:'缓存',barChipQuota:'额度',barChipContext:'上下文',barFooterMigrated:'已隐藏上下文芯片，设置入口已自动迁移至此浮卡底部。',
+      pulseSettings:'设置',pulseSettingsTitle:'Antigravity Pulse 设置',pulseSettingsSubtitle:'底栏自由换色 · 明暗 · 模块开关',settingsSectionTheme:'底栏配色与明暗',settingsSectionBar:'底栏模块与顺序',settingsSectionGeneral:'显示项与语言',settingsMode:'明暗',modeAuto:'跟随',modeLight:'浅色',modeDark:'深色',themeModeSaveFailed:'明暗设置暂时无法保存，请重试。',barColorSpeed:'速度 (tok/s)',barColorToken:'Token 用量',barColorQuota:'额度圆环',barColorContext:'上下文圆环',barColorDefault:'默认',barColorPick:'自定义颜色',barColorsSaveFailed:'底栏配色暂时无法保存，请重试。',cacheHitToneLabel:'高命中染色 (≥70%)',cacheHitToneAccent:'默认主色',cacheHitToneSemantic:'语义绿',cacheHitToneHint:'命中率分档：≥70% 高（主色或绿）· 30–69% 中（琥珀）· <30% 低（灰）',cacheHitToneSaveFailed:'配色设置暂时无法保存，请重试。',settingsBack:'返回',settingsClose:'关闭',
       remoteFallbackUnconfigured:'远程 SSH（{host}）：底栏仅显示共享额度；请在右侧辅助栏打开 Antigrative Dashboard 查看远程会话统计，或配置 SSH 端口转发以同步完整底栏。',remoteFallbackUnreachable:'远程 SSH（{host}）：未连上远程转发端点，底栏暂仅显示共享额度；请确认 SSH 端口转发已开启，或使用右侧辅助栏查看。',remoteConnectedBadge:'SSH · {host}',remoteQuotaTitle:'远程 SSH（{host}）· 共享额度',
+      stripMode:'状态条显示模式',stripFull:'完整状态条',stripMinimal:'极简状态条',stripCollapse:'收起为极简状态条',stripExpand:'展开完整状态条',stripModeSaveFailed:'显示模式暂时无法保存，请重试。',
     },
     'zh-TW':{
       collectionBackgroundFailed:'背景暫時無法完成，稍後會自動重試。',collectionProcessing:'正在補全統計',collectionProcessingReason:'背景處理中，可繼續使用。',collectionProgress:'查看進度',collectionProgressCounts:'已處理 {steps} 個步驟 · {requests} 筆請求記錄',collectionQueued:'等待處理',collectionSteps:'讀取步驟',collectionGenerators:'讀取請求記錄',collectionReducing:'計算統計',collectionPublishing:'儲存已驗證統計',
@@ -158,7 +162,7 @@ module.exports = function createDashboardI18n(initialLanguage) {
       creditsLabel:'Credits',creditsPrompt:'Prompt 額度',creditsFlow:'Flow 額度',creditsBadge:'{prompt}P · {flow}F',estimatedCostLabel:'預估費用',estimatedBadge:'估算',estimatedCostTitle:'依公開參考單價估算，非官方帳單。',
       insightsAll:'全部',insightsActive:'作用中',insightsArchived:'已封存',insightsSortRecent:'最近更新',insightsSortTokens:'Token 總量',insightsSortContext:'目前上下文',insightsSortCost:'預估費用',insightsSearchPlaceholder:'篩選對話…',insightsScan:'重新掃描',insightsScanning:'正在掃描本機對話…',
       insightsKpiSessions:'全部對話',insightsKpiSessionsSub:'{active} 作用中 · {archived} 封存',insightsKpiTokens:'Token 消耗',insightsKpiRoundsSub:'{n} 輪對話',insightsKpiCost:'預估費用',insightsKpiPricedSub:'已計價 {priced}/{total}',insightsKpiCache:'快取命中率',insightsKpiTools:'工具呼叫',insightsKpiDuration:'活躍時長',insightsKpiCallsSub:'{n} 次模型呼叫',
-      insights7dTitle:'近 7 天用量',insightsHeatmapTitle:'活躍度熱力圖',insightsHeatmapSessions:'對話數',insightsHeatmapTokens:'Token',insightsCompTitle:'Token 構成',insightsProjects:'專案分佈',insightsSkills:'技能載入',insightsTools:'工具呼叫',insightsCommands:'命令執行',insightsSessionsTitle:'對話列表（{n}）',insightsEmpty:'未發現本機對話日誌。',insightsCacheMeta:'{total} 個對話 · {ms}ms',
+      insights7dTitle:'近 7 天用量',insightsHeatmapTitle:'活躍度熱力圖',insightsHeatmapSessions:'對話數',insightsHeatmapTokens:'Token',insightsHeatmapLess:'少',insightsHeatmapMore:'多',insightsHeatmapSummary:'活躍 {days} 天 · 連續 {streak} 天 · 峰值 {peak}',insightsHeatmapPeakSessions:'{n} 對話',insightsHeatmapTip:'{date} · {sessions} 對話 · {tokens} tok',insightsHeatmapClearDate:'{date} ×',insightsEmptyDate:'{date} 當日暫無對話記錄。',insightsWeekdays:'一,,三,,五,,',insightsCompTitle:'Token 構成',insightsProjects:'專案分佈',insightsSkills:'技能載入',insightsTools:'工具呼叫',insightsCommands:'命令執行',insightsSessionsTitle:'對話列表（{n}）',insightsEmpty:'未發現本機對話日誌。',insightsCacheMeta:'{total} 個對話 · {ms}ms',
       savedStats:'顯示已儲存的對話統計資料（{time}）。',saveFailed:'統計資料暫時無法儲存至本機。',
       strip:'Antigrative Dashboard 對話與配額狀態列',session:'工作階段統計',cache:'快取命中',cacheTitle:'Token 用量',five:'5 小時配額',week:'每週配額',weekShort:'週',
       modelTime:'模型呼叫耗時',toolTime:'工具呼叫耗時',ttft:'首字延遲 P50 (TTFT)',ttftShort:'首字 (P50 / 最新)',ttftBasis:'首字延遲 TTFT（至首個串流/思考 Token，非正文首字）· 階段 P50：{p50} · 最新：{latest}',latestSpeed:'最新解碼',latestSpeedTip:'最近一筆合格請求的純串流解碼速度（總輸出含思考 ÷ 串流耗時；已隔離 < 1s 或 < 30 輸出 Token 的短視窗樣本）。',sessionAvg:'階段解碼',e2eSpeed:'端對端速率',e2eShort:'端對端',e2eBasis:'端對端有效速率：合格請求總輸出 Token ÷（首字延遲 + 串流耗時），反映計入等待後的綜合效率。',peakSpeed:'解碼峰值',peakBasis:'合格樣本中的純串流解碼峰值（已隔離 < 1s 或 < 30 輸出 Token 的短視窗突發）。',basisShortResponse:'僅回覆輸出',basisShortAll:'總輸出（含思考）',sessionTps:'連線階段解碼速率 (TPS)',latest:'最近一次請求',tokens:'回覆內文 / 思考輸出',remaining:'剩餘',
@@ -188,7 +192,9 @@ module.exports = function createDashboardI18n(initialLanguage) {
       orchSplitTitle:'Orchestrator 主/執行分工',orchCardTitle:'Orchestrator · 單工作階段雙模型',orchScopeHint:'同一工作階段內 · 規劃與執行切模型',orchSwitchCount:'切換 {n} 次',orchReadOnlyTag:'僅規劃',swarmScopeHint:'多工作階段並行團隊 · 主協調與各成員獨立對話',orchRolePlanner:'主調度',orchRoleExecutor:'執行模型',orchConfiguredPair:'已配組合：{planner} → {executor}',orchNoSwitchYet:'僅規劃/只讀 · 尚未切執行模型',orchColdStartNote:'切模型冷快取 {n} 次',orchColdStartLabel:'切模型冷快取',orchColdStartTip:'切至執行模型後首步快取讀為 0（不同模型不共用 KV 快取，需重新計算上下文）',cacheMissSurgeLabel:'大額冷快取',cacheMissSurgeTip:'單次請求快取讀為 0 且未快取輸入 ≥ 100K 的次數與累計量（常見於壓縮、切模型或快取過期後重算）',reqCountShort:'{n} 次請求',countTimes:'{n} 次',
       insightsProjectsSubtotal:'{n} 專案 · {tokens} toks',insightsSkillsSubtotal:'{n} 技能 · {runs} 次',insightsToolsSubtotal:'{n} 工具 · {calls} 次',insightsCommandsSubtotal:'{n} 指令 · {runs} 次',insightsUnitSessions:'{n} 工作階段',insightsUnitRuns:'{n} 次',insightsUnitCalls:'{n} 次',
       barCustomize:'自訂',barCustomizeTitle:'狀態列自訂',barReset:'重設預設',barContextChipMode:'上下文圓環副文案',barContextModeRounds:'輪數',barContextModeLabel:'標籤',barContextModeCompact:'極簡',barOrderLabel:'顯示項與順序',barKeepOneHint:'至少保留 1 個狀態列入口',barSaveFailed:'狀態列設定暫時無法儲存，請重試。',barMoveUp:'上移',barMoveDown:'下移',barChipSpeed:'速率',barChipCache:'快取',barChipQuota:'額度',barChipContext:'上下文',barFooterMigrated:'已隱藏上下文晶片，設定入口已自動遷移至此浮卡底部。',
+      pulseSettings:'設定',pulseSettingsTitle:'Antigravity Pulse 設定',pulseSettingsSubtitle:'底欄自由換色 · 明暗 · 模組開關',settingsSectionTheme:'底欄配色與明暗',settingsSectionBar:'底欄模組與順序',settingsSectionGeneral:'顯示項與語言',settingsMode:'明暗',modeAuto:'跟隨',modeLight:'淺色',modeDark:'深色',themeModeSaveFailed:'明暗設定暫時無法儲存，請重試。',barColorSpeed:'速度 (tok/s)',barColorToken:'Token 用量',barColorQuota:'額度圓環',barColorContext:'上下文圓環',barColorDefault:'預設',barColorPick:'自訂顏色',barColorsSaveFailed:'底欄配色暫時無法儲存，請重試。',cacheHitToneLabel:'高命中染色 (≥70%)',cacheHitToneAccent:'預設主色',cacheHitToneSemantic:'語義綠',cacheHitToneHint:'命中率分檔：≥70% 高（主色或綠）· 30–69% 中（琥珀）· <30% 低（灰）',cacheHitToneSaveFailed:'配色設定暫時無法儲存，請重試。',settingsBack:'返回',settingsClose:'關閉',
       remoteFallbackUnconfigured:'遠端 SSH（{host}）：底欄僅顯示共享額度；請在右側輔助欄開啟 Antigrative Dashboard 查看遠端工作階段統計，或設定 SSH 連接埠轉發以同步完整底欄。',remoteFallbackUnreachable:'遠端 SSH（{host}）：無法連線至遠端轉發端點，底欄暫僅顯示共享額度；請確認 SSH 連接埠轉發已開啟，或使用右側輔助欄查看。',remoteConnectedBadge:'SSH · {host}',remoteQuotaTitle:'遠端 SSH（{host}）· 共享額度',
+      stripMode:'狀態列顯示模式',stripFull:'完整狀態列',stripMinimal:'極簡狀態列',stripCollapse:'收合為極簡狀態列',stripExpand:'展開完整狀態列',stripModeSaveFailed:'顯示模式暫時無法儲存，請重試。',
     },
   };
   let language=initialLanguage==='zh-CN'||initialLanguage==='zh-TW'?initialLanguage:'en';
@@ -307,8 +313,8 @@ module.exports = function createDashboardI18n(initialLanguage) {
     })();
     return {ready,sync,choose,toggle:()=>choose(language==='en'?(lastZh||'zh-TW'):'en'),get error(){return error;},get pending(){return writes>0;},dispose(){disposed=true;}};
   }
-  function connectChoicePreference({key,allowed,fallback,write,initial=null,cache=()=>{},changed=()=>{}}){
-    const normalize=value=>allowed.includes(value)?value:fallback;
+  function connectChoicePreference({key,allowed,fallback,write,initial=null,cache=()=>{},changed=()=>{},normalize:customNormalize=null}){
+    const normalize=customNormalize||(value=>allowed.includes(value)?value:fallback);
     let current=normalize(initial),epoch=0,writes=0,revision=-1,error=false,disposed=false,queue=Promise.resolve();
     const notify=()=>{if(!disposed)changed(current);};
     const remember=()=>{try{cache(current);}catch{}};
@@ -344,11 +350,20 @@ module.exports = function createDashboardI18n(initialLanguage) {
   const QUOTA_DISPLAYS=['both','auto','compact'];
   const HOST_UI_LOCALIZATIONS=[false,true];
   const INLINE_CACHE_HITS=[false,true];
+  const STRIP_MODES=['full','minimal'];
+  const BAR_COLOR_KEYS=['speed','token','quota','context'];
+  const THEME_MODES=['auto','light','dark'];
+  const CACHE_HIT_TONES=['accent','semantic'];
   function normalizeSpeedStyle(value){return SPEED_STYLES.includes(value)?value:'minimal';}
   function normalizeUsageScope(value){return USAGE_SCOPES.includes(value)?value:'local';}
   function normalizeQuotaDisplay(value){return QUOTA_DISPLAYS.includes(value)?value:'both';}
   function normalizeHostUiLocalization(value){return value===true;}
   function normalizeInlineCacheHit(value){return value!==false;}
+  function normalizeStripMode(value){return STRIP_MODES.includes(value)?value:'full';}
+  function normalizeHexColor(value){if(typeof value!=='string')return null;const m=/^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(value.trim());if(!m)return null;const h=m[1].length===3?Array.from(m[1],c=>c+c).join(''):m[1];return `#${h.toLowerCase()}`;}
+  function normalizeBarColors(value){const out={};if(!value||typeof value!=='object'||Array.isArray(value))return out;for(const k of BAR_COLOR_KEYS){const c=normalizeHexColor(value[k]);if(c)out[k]=c;}return out;}
+  function normalizeThemeMode(value){return THEME_MODES.includes(value)?value:'auto';}
+  function normalizeCacheHitTone(value){return CACHE_HIT_TONES.includes(value)?value:'accent';}
   function connectSpeedStyle(options){
     const ctrl=connectChoicePreference({key:'speedStyle',allowed:SPEED_STYLES,fallback:'minimal',...options});
     return {sync:ctrl.sync,choose:ctrl.choose,get style(){return ctrl.value;},get error(){return ctrl.error;},dispose:ctrl.dispose};
@@ -368,6 +383,59 @@ module.exports = function createDashboardI18n(initialLanguage) {
   function connectInlineCacheHit(options){
     const ctrl=connectChoicePreference({key:'inlineCacheHit',allowed:INLINE_CACHE_HITS,fallback:true,...options});
     return {sync:ctrl.sync,choose:value=>ctrl.choose(value===true),get enabled(){return ctrl.value!==false;},get error(){return ctrl.error;},dispose:ctrl.dispose};
+  }
+  function connectStripMode(options){
+    const ctrl=connectChoicePreference({key:'stripMode',allowed:STRIP_MODES,fallback:'full',...options});
+    return {sync:ctrl.sync,choose:ctrl.choose,get mode(){return ctrl.value;},get error(){return ctrl.error;},dispose:ctrl.dispose};
+  }
+  function connectBarColors({write,initial=null,cache=()=>{},changed=()=>{}}){
+    let colors=normalizeBarColors(initial),epoch=0,writes=0,revision=-1,error=false,disposed=false,queue=Promise.resolve();
+    const same=(a,b)=>BAR_COLOR_KEYS.every(k=>(a[k]||null)===(b[k]||null));
+    const notify=()=>{if(!disposed)changed();};
+    const remember=()=>{try{cache({...colors});}catch{}};
+    function sync(value){
+      if(disposed||writes||!value||typeof value!=='object'||value.error)return;
+      const nextRev=Number.isSafeInteger(value.revision)?value.revision:0;
+      if(nextRev<revision)return;
+      const incoming=normalizeBarColors(value.barColors);
+      const differs=!same(incoming,colors);
+      if(error&&epoch>0&&differs)return;
+      revision=nextRev;
+      const dirty=differs||error;error=false;
+      if(differs){colors=incoming;remember();}
+      if(dirty)notify();
+    }
+    function setAll(nextInput){
+      if(disposed)return Promise.resolve();
+      const next=normalizeBarColors(nextInput);
+      const choice=++epoch;colors=next;writes++;error=false;remember();notify();
+      const pending=queue.then(async()=>{
+        try{
+          const saved=await write({barColors:next});
+          if(!saved||saved.error||!same(normalizeBarColors(saved.barColors),next))throw new Error('Preference acknowledgement differs');
+          revision=Math.max(revision,Number.isSafeInteger(saved.revision)?saved.revision:0);
+          if(choice===epoch)error=false;
+        }catch{if(choice===epoch)error=true;}
+        finally{writes--;notify();}
+      });
+      queue=pending;return pending;
+    }
+    function setColor(slot,hexOrNull){
+      if(!BAR_COLOR_KEYS.includes(slot))return Promise.resolve();
+      const next={...colors};
+      const clean=normalizeHexColor(hexOrNull);
+      if(clean)next[slot]=clean;else delete next[slot];
+      return setAll(next);
+    }
+    return {sync,setColor,reset:()=>setAll({}),get colors(){return {...colors};},get error(){return error;},dispose(){disposed=true;}};
+  }
+  function connectThemeMode(options){
+    const ctrl=connectChoicePreference({key:'themeMode',allowed:THEME_MODES,fallback:'auto',...options});
+    return {sync:ctrl.sync,choose:ctrl.choose,get value(){return ctrl.value;},get error(){return ctrl.error;},dispose:ctrl.dispose};
+  }
+  function connectCacheHitTone(options){
+    const ctrl=connectChoicePreference({key:'cacheHitTone',allowed:CACHE_HIT_TONES,fallback:'accent',...options});
+    return {sync:ctrl.sync,choose:ctrl.choose,get value(){return ctrl.value;},get error(){return ctrl.error;},dispose:ctrl.dispose};
   }
   const BAR_CARDS=['speed','cache','quota','context'];
   const CONTEXT_CHIP_MODES=['rounds','label','compact'];
@@ -631,5 +699,5 @@ module.exports = function createDashboardI18n(initialLanguage) {
     if(mode==='compact'&&show){const other=show==='5h'?wv:fv;if(other!==null&&other<=0.25)dot=other<=0.10?'danger':'warn';}
     return {five,week,min,show,arcValue,level,dot};
   }
-  return {mountLanguagePicker,normalizeSpeedStyle,connectSpeedStyle,normalizeUsageScope,connectUsageScope,normalizeQuotaDisplay,connectQuotaDisplay,normalizeHostUiLocalization,connectHostUiLocalization,normalizeInlineCacheHit,connectInlineCacheHit,normalizeBarOrder,normalizeBarHidden,normalizeContextChipMode,connectBarPreferences,quotaRingView,minimalTrail,t,rateNote,quotaGroupKind,quotaGroupLabel,chooseQuotaGroup,quotaWindows,quotaRemaining,shortEta,quotaForecast,groupQuotaPace,countdown,elapsed,resetDate,errorMessage,connectPreferences,get language(){return language;},setLanguage(value){language=value==='zh-CN'||value==='zh-TW'?value:'en';if(language!=='en')lastZh=language;},toggle(){language=language==='en'?(lastZh||'zh-TW'):'en';return language;}};
+  return {mountLanguagePicker,normalizeSpeedStyle,connectSpeedStyle,normalizeUsageScope,connectUsageScope,normalizeQuotaDisplay,connectQuotaDisplay,normalizeHostUiLocalization,connectHostUiLocalization,normalizeInlineCacheHit,connectInlineCacheHit,normalizeStripMode,connectStripMode,normalizeBarColors,connectBarColors,normalizeThemeMode,connectThemeMode,normalizeCacheHitTone,connectCacheHitTone,normalizeBarOrder,normalizeBarHidden,normalizeContextChipMode,connectBarPreferences,quotaRingView,minimalTrail,t,rateNote,quotaGroupKind,quotaGroupLabel,chooseQuotaGroup,quotaWindows,quotaRemaining,shortEta,quotaForecast,groupQuotaPace,countdown,elapsed,resetDate,errorMessage,connectPreferences,get language(){return language;},setLanguage(value){language=value==='zh-CN'||value==='zh-TW'?value:'en';if(language!=='en')lastZh=language;},toggle(){language=language==='en'?(lastZh||'zh-TW'):'en';return language;}};
 };

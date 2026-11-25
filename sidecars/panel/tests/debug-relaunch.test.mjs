@@ -310,6 +310,9 @@ test('worker records quit-timeout, early exit, spawn error and healthy start to 
   assert.equal(exited.result.launched, true);
   assert.deepEqual(exited.lines.map(l => [l.outcome, l.code, l.at]), [['exited-early', 1, 1234]]);
 
+  const darwinOpen = await run('darwin', { on(ev, cb) { if (ev === 'exit') cb(0, null); }, unref() {} });
+  assert.deepEqual(darwinOpen.lines.map(l => [l.outcome, l.code, l.at]), [['launched', 0, 1234]]);
+
   const errored = await run('linux', { on(ev, cb) { if (ev === 'error') cb(Object.assign(new Error('x'), { code: 'ENOENT' })); }, unref() {} });
   assert.deepEqual(errored.lines.map(l => [l.outcome, l.error]), [['spawn-error', 'ENOENT']]);
 
@@ -359,6 +362,12 @@ test('scheduleHostRelaunch backs off auto relaunch for 10 minutes after a failed
   currentNow += 20000;
   const healthy = await scheduleHostRelaunch({ ...common, reason: 'auto', execFileImpl: async () => ({ stdout: ' 800 /Applications/Antigravity.app/Contents/MacOS/Antigravity\n' }) });
   assert.notEqual(healthy.reason, 'recent-failure');
+
+  // macOS `open -a` exits with code 0 normally and must not poison auto relaunch
+  await writeFile(spawns[0].logFile, `${JSON.stringify({ at: currentNow, outcome: 'exited-early', code: 0, signal: null })}\n`);
+  currentNow += 60000;
+  const darwinBenign = await scheduleHostRelaunch({ ...common, reason: 'auto', execFileImpl: async () => ({ stdout: ' 900 /Applications/Antigravity.app/Contents/MacOS/Antigravity\n' }) });
+  assert.equal(darwinBenign.scheduled, true);
 });
 
 test('real worker kills an isolated dummy node PID before spawning target with clean env', { skip: process.platform === 'win32' }, async t => {

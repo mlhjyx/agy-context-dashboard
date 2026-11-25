@@ -1,27 +1,25 @@
-# AGY Context Dashboard v1.0.0
+# AGY Context Dashboard v1.0.1
 
-## v1.0.0 更新内容
+## v1.0.1 更新内容
 
-- **底栏指标自定义（[#60](https://github.com/wycocoyu/agy-context-dashboard/issues/60)）**：支持按需开启/隐藏 `Speed`、`Total`、`Quota`、`Context` 四项底栏指标，支持拖拽或点击 `↑`/`↓` 调整顺序，支持 Context 圆环在 `轮次`、`名称` 与 `精简` 间切换，并在面板底部提供防锁死自定义入口。
-- **上下文轮次、步数抽屉与数字格式（[#53](https://github.com/wycocoyu/agy-context-dashboard/issues/53)、[#59](https://github.com/wycocoyu/agy-context-dashboard/pull/59)）**：新增 `{rounds} 轮 · {steps} 步` 中性白标胶囊与 5 分类步数展开抽屉，底栏 Context 补充 `· {n}轮`，并将小于 `10,000` 的 4 位整数改为无千位分隔显示。
-- **Orchestrator/Swarm 拆分、Insights 与中文化（[#57](https://github.com/wycocoyu/agy-context-dashboard/issues/57)）**：拆分 Orchestrator Planner/Executor 统计，升级 Swarm 双行成员列表与 `Active`/`All` 筛选，打磨 Insights 4 张分布卡片，调整顶部页签顺序（`Session` / `Insights` / `Daily/Weekly` / `Models`），并完善中文提示与多语言说明。
-- **用量趋势图优化（[#61](https://github.com/wycocoyu/agy-context-dashboard/issues/61)）**：优化 Day/Week/Month 柱状图 X 轴刻度、选中态对比度与图例顺序。
+- **底栏自由换色、浅/深色切换与非模态设置面板（[#76](https://github.com/wycocoyu/agy-context-dashboard/issues/76)、[#69](https://github.com/wycocoyu/agy-context-dashboard/pull/69)）**：默认保持原版透明无边框样式与蓝色高缓存命中显示（`>= 70%`），新增停靠在底栏上方的非模态设置弹层，支持 `跟随 / 浅色 / 深色`、高命中 `默认主色 / 语义绿` 切换，以及 `速度 / Token / 配额 / 上下文` 四项独立预设与原生取色器定制（保留告警色覆盖优先级）；并在 `Token · 缓存` 卡片中就地保留与设置面板双向同步的「底栏显示命中率」快捷开关。
+- **主输入框宽度保护与极简折叠模式（[#72](https://github.com/wycocoyu/agy-context-dashboard/issues/72)、[#84](https://github.com/wycocoyu/agy-context-dashboard/pull/84)）**：优先保留主对话模型选择器宽度避免文字截断，通过 `compact-text` 中间档平滑收敛并新增持久化的 `完整 / 极简` 状态条收起开关。
+- **热力图、配置下钻与 Remote SSH 适配（[#63](https://github.com/wycocoyu/agy-context-dashboard/issues/63)、[#64](https://github.com/wycocoyu/agy-context-dashboard/issues/64)、[#65](https://github.com/wycocoyu/agy-context-dashboard/issues/65)、[#66](https://github.com/wycocoyu/agy-context-dashboard/issues/66)、[#74](https://github.com/wycocoyu/agy-context-dashboard/pull/74)）**：统一 `Token · 缓存` 四视图结构，重做 Insights 正方形活动热力图与日期筛选、升级侧栏用量热力图响应式窗口与规则/技能配置下钻，并支持 Remote SSH 回环桥接与降级提示。
 
 ## 安装与升级
 
-- **桌面端扩展包**：下载 `antigrative-dashboard-1.0.0.zip`，运行 `python3 manage.py install` 或 `python3 manage.py upgrade`（详情见 [README.md](README.md)）。
-- **IDE 扩展包**：下载 `antigrative-dashboard-ide-1.0.0.vsix`，在 IDE 扩展视图选择「从 VSIX 安装」。
+- **桌面端扩展包**：下载 `antigrative-dashboard-1.0.1.zip`，运行 `python3 manage.py install` 或 `python3 manage.py upgrade`（详情见 [README.md](README.md)）。
+- **IDE 扩展包**：下载 `antigrative-dashboard-ide-1.0.1.vsix`，在 IDE 扩展视图选择「从 VSIX 安装」。
 
 ---
 
-## What changed in v1.0.0
+## What changed in v1.0.1
 
-- **Customizable inline status bar ([#60](https://github.com/wycocoyu/agy-context-dashboard/issues/60))**: Show or hide individual bottom chips (`Speed`, `Total`, `Quota`, `Context`), reorder them via drag-and-drop or `↑`/`↓` buttons, switch the Context ring between `rounds`, `label`, and `compact`, and access bar customization from the panel footer without lockout.
-- **Context rounds, step breakdown drawer & number formatting ([#53](https://github.com/wycocoyu/agy-context-dashboard/issues/53), [#59](https://github.com/wycocoyu/agy-context-dashboard/pull/59))**: Added a neutral `{rounds} 轮 · {steps} 步` pill with an expandable 5-bucket step drawer, inline `· {n}轮` suffix, and ungrouped 4-digit integers under `10,000`.
-- **Orchestrator/Swarm split, Insights & localization ([#57](https://github.com/wycocoyu/agy-context-dashboard/issues/57))**: Separated Orchestrator Planner/Executor tracking, added a two-line Swarm roster with `Active`/`All` filtering, polished the 4 Insights distribution cards, reordered top-level tabs (`Session`, `Insights`, `Daily/Weekly`, `Models`), and refined Chinese localization.
-- **Usage chart polish ([#61](https://github.com/wycocoyu/agy-context-dashboard/issues/61))**: Improved Day/Week/Month bar chart x-axis ticks, active pill contrast, and legend ordering.
+- **Per-item bar colors, polarity toggle & non-modal settings ([#76](https://github.com/wycocoyu/agy-context-dashboard/issues/76), [#69](https://github.com/wycocoyu/agy-context-dashboard/pull/69))**: Keeps the default borderless inline bar and accent-blue high cache-hit rate (`>= 70%`), adds a non-modal Settings popover anchored above the bar (`auto / light / dark`, high-hit accent/semantic toggle, and independent `default` + preset swatches + color pickers for `Speed`, `Token`, `Quota`, and `Context` while preserving warning/danger overrides), and keeps a synced quick inline cache-hit toggle inside the `Token · Cache` card.
+- **Model selector width guard & minimal strip collapse ([#72](https://github.com/wycocoyu/agy-context-dashboard/issues/72), [#84](https://github.com/wycocoyu/agy-context-dashboard/pull/84))**: Protects the main composer model selector from truncation via a `compact-text` tier before falling back to icons, and adds a persisted `full / minimal` collapse toggle.
+- **Heatmaps, config drilldown & Remote SSH ([#63](https://github.com/wycocoyu/agy-context-dashboard/issues/63), [#64](https://github.com/wycocoyu/agy-context-dashboard/issues/64), [#65](https://github.com/wycocoyu/agy-context-dashboard/issues/65), [#66](https://github.com/wycocoyu/agy-context-dashboard/issues/66), [#74](https://github.com/wycocoyu/agy-context-dashboard/pull/74))**: Unified `Token · Cache` IA labels, redesigned square Insights heatmap with date filtering, responsive sidebar usage heatmap windowing, rules & skills drilldown polish, and Remote SSH telemetry + fallback bridge.
 
 ## Install or update
 
-- **Desktop App bundle**: Download `antigrative-dashboard-1.0.0.zip` and run `python3 manage.py install` or `python3 manage.py upgrade` (see [README.en.md](README.en.md)).
-- **IDE extension**: Download `antigrative-dashboard-ide-1.0.0.vsix` and choose **Install from VSIX…** in the IDE Extensions view.
+- **Desktop App bundle**: Download `antigrative-dashboard-1.0.1.zip` and run `python3 manage.py install` or `python3 manage.py upgrade` (see [README.en.md](README.en.md)).
+- **IDE extension**: Download `antigrative-dashboard-ide-1.0.1.vsix` and choose **Install from VSIX…** in the IDE Extensions view.

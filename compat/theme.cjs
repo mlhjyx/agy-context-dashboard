@@ -1,5 +1,26 @@
 // Shared theme controller for the injected Shadow DOM and the SDK side panel.
 module.exports = function createAgPulseTheme() {
+  const THEME_MODES = ['auto', 'light', 'dark'];
+  const BAR_COLOR_KEYS = ['speed', 'token', 'quota', 'context'];
+  function normalizeHexColor(value) {
+    if (typeof value !== 'string') return null;
+    const m = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(value.trim());
+    if (!m) return null;
+    const h = m[1].length === 3 ? Array.from(m[1], c => c + c).join('') : m[1];
+    return `#${h.toLowerCase()}`;
+  }
+  function normalizeBarColors(value) {
+    const out = {};
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return out;
+    for (const key of BAR_COLOR_KEYS) {
+      const clean = normalizeHexColor(value[key]);
+      if (clean) out[key] = clean;
+    }
+    return out;
+  }
+  function normalizeThemeMode(value) {
+    return typeof value === 'string' && THEME_MODES.includes(value) ? value : 'auto';
+  }
   const palettes = {
     dark: { scheme:'dark', page:'#121315', background:'#1c1d1f', card:'#2a2c2f', 'card-end':'#303235', foreground:'#e1e3e7', chip:'#aaaeb6', muted:'#adb2ba', subtle:'#a3aab5', label:'#b8bdc5', hover:'#292b2e', 'hover-text':'#d9dce2', accent:'#85a8ff', 'context-accent':'#7688b2', 'quota-accent':'#7ea5ff', emphasis:'#dbe5ff', border:'#41454d', separator:'#ffffff15', track:'#ffffff15', control:'#383b3f', 'control-text':'#c2c7d1', menu:'#303338', selected:'#444950', ring:'#9fadc7', 'ring-track':'#565c67', dot:'#777c84', success:'#8bb19b', warning:'#d7b079', danger:'#e99b9b', shadow:'#0005' },
     light: { scheme:'light', page:'#f5f6f8', background:'#ffffff', card:'#ffffff', 'card-end':'#f5f7fa', foreground:'#202631', chip:'#485261', muted:'#596575', subtle:'#626d7c', label:'#515c6b', hover:'#e9edf3', 'hover-text':'#172333', accent:'#315fc4', 'context-accent':'#4e6799', 'quota-accent':'#4678e6', emphasis:'#284e9b', border:'#ccd3df', separator:'#18253b20', track:'#dce2ec', control:'#e8edf4', 'control-text':'#354255', menu:'#ffffff', selected:'#e4ebf6', ring:'#4667a0', 'ring-track':'#c5cedd', dot:'#707b8a', success:'#347451', warning:'#8b601b', danger:'#b13c3c', shadow:'#14234026' },
@@ -71,7 +92,7 @@ module.exports = function createAgPulseTheme() {
     const media = window.matchMedia('(prefers-color-scheme: dark)');
     const canvas = document.createElement('canvas'); canvas.width=canvas.height=1;
     const context = canvas.getContext('2d', { willReadFrequently:true });
-    let stopped=false,hostTheme={},lastSig=null;
+    let stopped=false,hostTheme={},themeMode='auto',barColors={},lastSig=null;
     function rgb(color) {
       if (!color || !context || !CSS.supports('color',color)) return null;
       context.clearRect(0,0,1,1); context.fillStyle='transparent';context.fillStyle=color; context.fillRect(0,0,1,1);
@@ -94,7 +115,7 @@ module.exports = function createAgPulseTheme() {
       const dark=['dark','dark-theme','theme-dark','vscode-dark','vs-dark','hc-black'].some(value=>classes.contains(value));
       return light===dark ? null : light ? 'light' : 'dark';
     }
-    function resolve() {
+    function resolveHostScheme() {
       const root=document.documentElement;
       // App settings override the OS, including when the app uses a fixed theme.
       const declared=explicit(document.body)||explicit(root);
@@ -112,6 +133,10 @@ module.exports = function createAgPulseTheme() {
       }
       if(hostTheme.mode==='light'||hostTheme.mode==='dark')return hostTheme.mode;
       return media.matches ? 'dark' : 'light';
+    }
+    function resolve() {
+      if (themeMode==='light'||themeMode==='dark') return themeMode;
+      return resolveHostScheme();
     }
     function hostColor(tokens) {
       // The renderer's active primary wins over saved seeds: a user may have
@@ -141,31 +166,37 @@ module.exports = function createAgPulseTheme() {
       }
       return colorCss(end);
     }
-    function surfaceColors(theme) {
-      let background=hostColor(['--background','--color-background'])||rgb(hostTheme[theme]?.background);
-      if(!background&&embedded){
-        for(let element=target.parentElement;element;element=element.parentElement){
-          background=rgb(getComputedStyle(element).backgroundColor);if(background)break;
-        }
-      }
-      if(!background)return {};
-      // Use actual host card surfaces (including color-mix/OKLCH) where available.
-      // If only a seed exists, derive a subtle raised surface in the same hue.
-      const dark=luminance(background)<.35,end=dark?[255,255,255]:[0,0,0];
-      let card=hostColor(['--popover','--card','--color-card'])||mix(background,end,dark?.05:.015);
-      // Wildly incompatible host tokens must not make shared text unreadable.
-      const commonContrast=bg=>Math.max(...[[255,255,255],[0,0,0]].map(fg=>Math.min(contrast(fg,background),contrast(fg,bg))));
-      if(commonContrast(card)<4.5)card=mix(background,end,dark?.05:.015);
+    function deriveSurfaceValues(background, card, foreground, dark) {
+      const end=dark?[255,255,255]:[0,0,0];
       const hover=mix(card,end,.06),control=mix(card,end,.08),selected=mix(card,end,.12);
       const surfaces=[background,card,hover,control,selected];
-      const foreground=hostColor(['--foreground','--color-foreground'])||rgb(hostTheme[theme]?.foregroundOverride)||rgb(palettes[dark?'dark':'light'].foreground);
       const text=rgb(readableColor(foreground,surfaces));
       const values={page:background,background,card,'card-end':card,menu:card,hover,control,selected,
         foreground:text,chip:mix(card,text,.8),muted:mix(card,text,.75),subtle:mix(card,text,.7),label:mix(card,text,.8),
         'hover-text':text,'control-text':mix(card,text,.85),border:mix(card,text,.24),separator:mix(card,text,.14),track:mix(card,text,.14),
         'ring-track':mix(card,text,.24),dot:mix(card,text,.6)};
       for(const key of ['chip','muted','subtle','label','control-text'])values[key]=rgb(readableColor(values[key],surfaces));
-      return Object.fromEntries(Object.entries(values).map(([key,value])=>[key,colorCss(value)]));
+      return { values: { ...Object.fromEntries(Object.entries(values).map(([key,value])=>[key,colorCss(value)])), shadow: dark ? 'rgba(0,0,0,.38)' : 'rgba(20,35,64,.14)' }, surfaces };
+    }
+    function surfaceColors(theme) {
+      const followHost=themeMode==='auto';
+      const explicitBg=hostColor(['--background','--color-background']);
+      const explicitMatches=Boolean(explicitBg&&((luminance(explicitBg)<.35)===(theme==='dark')));
+      let background=(explicitBg&&(followHost||explicitMatches)?explicitBg:null)||rgb(hostTheme[theme]?.background);
+      if(!background&&embedded){
+        for(let element=target.parentElement;element;element=element.parentElement){
+          const candidate=rgb(getComputedStyle(element).backgroundColor);
+          if(candidate&&(followHost||(luminance(candidate)<.35)===(theme==='dark'))){background=candidate;break;}
+        }
+      }
+      if(!background)return {};
+      const hostMatchesTheme=followHost||explicitMatches||(!explicitBg&&resolveHostScheme()===theme);
+      const dark=luminance(background)<.35,end=dark?[255,255,255]:[0,0,0];
+      let card=(hostMatchesTheme?hostColor(['--popover','--card','--color-card']):null)||mix(background,end,dark?.05:.015);
+      const commonContrast=bg=>Math.max(...[[255,255,255],[0,0,0]].map(fg=>Math.min(contrast(fg,background),contrast(fg,bg))));
+      if(commonContrast(card)<4.5)card=mix(background,end,dark?.05:.015);
+      const foreground=(hostMatchesTheme?hostColor(['--foreground','--color-foreground']):null)||rgb(hostTheme[theme]?.foregroundOverride)||rgb(palettes[dark?'dark':'light'].foreground);
+      return deriveSurfaceValues(background, card, foreground, dark).values;
     }
     function hostCssVar(keys) {
       for(const source of [target.parentElement,document.body,document.documentElement]){
@@ -200,10 +231,13 @@ module.exports = function createAgPulseTheme() {
     function update() {
       if (stopped) return;
       const theme=resolve();
+      const hostMatchesTheme=themeMode==='auto'||resolveHostScheme()===theme;
       if (target.dataset.pulseTheme!==theme) target.dataset.pulseTheme=theme;
+      if (target.dataset.pulseSkin) delete target.dataset.pulseSkin;
+      if (target.dataset.pulseBarSkinned) delete target.dataset.pulseBarSkinned;
       const values=surfaceColors(theme);
       const surfaces=[values.card||palettes[theme].card,values.background||palettes[theme].background,values.control||palettes[theme].control].map(rgb);
-      const primary=hostColor(['--primary','--color-primary'])||rgb(hostTheme[theme]?.primary);
+      const primary=(hostMatchesTheme?hostColor(['--primary','--color-primary']):null)||rgb(hostTheme[theme]?.primary);
       if(primary){
         values.accent=colorCss(primary);
         values.ring=colorCss(primary);
@@ -213,8 +247,11 @@ module.exports = function createAgPulseTheme() {
       if(primary||values.card)values.emphasis=readableColor(primary||rgb(palettes[theme].emphasis),surfaces);
       // Severity text must also remain readable on custom surfaces.
       if(values.card)for(const key of ['success','warning','danger'])values[key]=readableColor(rgb(palettes[theme][key]),surfaces);
+      for(const key of BAR_COLOR_KEYS){
+        if(barColors[key])values['bar-'+key]=readableColor(rgb(barColors[key]),surfaces);
+      }
       const fonts=resolvedFonts();
-      for(const key of Object.keys(palettes[theme])){
+      for(const key of [...Object.keys(palettes[theme]),...BAR_COLOR_KEYS.map(k=>'bar-'+k)]){
         const property='--pulse-'+key,value=values[key];
         if(value){if(target.style.getPropertyValue(property)!==value)target.style.setProperty(property,value);}
         else if(target.style.getPropertyValue(property))target.style.removeProperty(property);
@@ -223,7 +260,7 @@ module.exports = function createAgPulseTheme() {
         if(value){if(target.style.getPropertyValue(property)!==value)target.style.setProperty(property,value);}
         else if(target.style.getPropertyValue(property))target.style.removeProperty(property);
       }
-      const nextSig=JSON.stringify([theme,values.background,values.card,values.accent,fonts.font,fonts.fontMono]);
+      const nextSig=JSON.stringify([theme,themeMode,barColors,values.background,values.card,values.accent,fonts.font,fonts.fontMono]);
       if(lastSig!==null&&lastSig!==nextSig){lastSig=nextSig;onChange?.(theme);}else lastSig=nextSig;
       return theme;
     }
@@ -237,7 +274,7 @@ module.exports = function createAgPulseTheme() {
     // Catch stylesheet replacement and reparented composers without observing chat text.
     const timer=setInterval(update,1500);
     update();
-    return { update, setHostTheme(value) { hostTheme=normalizeHostTheme(value);return update(); }, dispose() { stopped=true;observer.disconnect();media.removeEventListener('change',update);clearInterval(timer); } };
+    return { update, setHostTheme(value) { hostTheme=normalizeHostTheme(value);return update(); }, setThemeMode(value) { const next=normalizeThemeMode(value);if(next===themeMode)return resolve();themeMode=next;return update(); }, setBarColors(value) { const next=normalizeBarColors(value);if(JSON.stringify(next)===JSON.stringify(barColors))return resolve();barColors=next;return update(); }, dispose() { stopped=true;observer.disconnect();media.removeEventListener('change',update);clearInterval(timer); } };
   }
-  return { css, shadowCss, attach, normalizeHostTheme };
+  return { css, shadowCss, attach, normalizeHostTheme, normalizeThemeMode, normalizeBarColors, THEME_MODES, BAR_COLOR_KEYS };
 };

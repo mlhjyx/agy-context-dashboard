@@ -15,6 +15,13 @@ export const DEFAULT_MANUAL_DEBOUNCE_MS = 5000;
 export const DEFAULT_FAILURE_BACKOFF_MS = 600000;
 export const WORKER_LOG_NAME = 'debug-relaunch-worker.log';
 const FAILED_OUTCOMES = new Set(['quit-timeout', 'spawn-error', 'exited-early']);
+function isFailedWorkerEntry(entry, platform) {
+  if (!entry || !FAILED_OUTCOMES.has(entry.outcome)) return false;
+  if (platform === 'darwin' && entry.outcome === 'exited-early' && entry.code === 0 && entry.signal == null) {
+    return false;
+  }
+  return true;
+}
 
 const HELPER_OR_NON_MAIN = /(?:--type=|--import=|--headless(?:\s|=|$)|language_server|chrome_crashpad_handler|Antigravity Helper|debug-relaunch-worker\.mjs|sidecars[\\/]+panel[\\/]+main\.mjs)/i;
 const REMOTE_DEBUG_PORT_FLAG = /(?:^|\s)--remote-debugging-port(?:=|\s+)\d+(?:\s|$)/;
@@ -370,7 +377,7 @@ export async function scheduleHostRelaunch({
     const workerLogFile = join(dataDir, WORKER_LOG_NAME);
     if (normalizedReason === 'auto') {
       const lastRun = await readLastWorkerEntry(workerLogFile);
-      if (lastRun && FAILED_OUTCOMES.has(lastRun.outcome) && currentNow >= lastRun.at && currentNow - lastRun.at < failureBackoffMs) {
+      if (isFailedWorkerEntry(lastRun, platform) && currentNow >= lastRun.at && currentNow - lastRun.at < failureBackoffMs) {
         return { scheduled: false, reason: 'recent-failure', state };
       }
       if (samePidSet(state.pids, guard.pids)) {

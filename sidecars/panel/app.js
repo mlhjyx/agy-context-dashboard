@@ -36,7 +36,7 @@ const expandedDrilldownGroups=new Set(['Rules']);
 const expandedDrilldownMore=new Set();
 const expandedMcpServers=new Set();
 let auditOpen=false,auditTab='files',auditStepFilter='all',auditData=null,auditConvId=null,auditLoading=false,auditError=null,highlightedStepIndex=null;
-let insightsData=null,insightsLoading=false,insightsError=null,heatmapMetric='sessions',insightsSearchTimer=null;
+let insightsData=null,insightsLoading=false,insightsError=null,heatmapMetric='sessions',selectedHeatmapDate=null,insightsLoadedDate=null,insightsSearchTimer=null;
 let refreshRequest=null,manualRequest=null;
 let relaunchBusy=false,relaunchStatusKey='',autoRelaunchState={busy:false,error:false,revision:-1,value:true};
 const host = window.sidecar;
@@ -64,6 +64,13 @@ const speedStyle=language.connectSpeedStyle({initial:localGet('ag-pulse-speed-st
   changed:()=>{applySpeedStyle();localize();render();}});
 const hostUiLocalization=language.connectHostUiLocalization({initial:localGet('ag-pulse-host-ui-localization')==='true',cache:value=>localSet('ag-pulse-host-ui-localization',value?'true':'false'),write:preferenceRequest,
   changed:()=>{localize();}});
+const readBarColorsCache=()=>{try{const raw=localGet('ag-pulse-bar-colors');return raw?JSON.parse(raw):null;}catch{return null;}};
+const barColorsPref=language.connectBarColors({initial:readBarColorsCache(),cache:value=>localSet('ag-pulse-bar-colors',JSON.stringify(value)),write:preferenceRequest,
+  changed:()=>{themeController?.setBarColors?.(barColorsPref.colors);}});
+const themeModePref=language.connectThemeMode({initial:localGet('ag-pulse-theme-mode'),cache:value=>localSet('ag-pulse-theme-mode',value),write:preferenceRequest,
+  changed:()=>{themeController?.setThemeMode?.(themeModePref.value);}});
+themeController?.setThemeMode?.(themeModePref.value);
+themeController?.setBarColors?.(barColorsPref.colors);
 const usageScope=language.connectUsageScope({initial:localGet('ag-pulse-usage-scope'),cache:value=>localSet('ag-pulse-usage-scope',value),write:preferenceRequest,
   changed:()=>{usageDashboard?.renderIfVisible?.();}});
 const usageFactory=typeof createUsageDashboard==='function'?createUsageDashboard:window.__agPulseUsageFactory;
@@ -133,6 +140,7 @@ function showPanelView(nextView,{fromUsageUi=false}={}){
   const isSession=nextView==='session';
   const isUsage=nextView==='activity'||nextView==='models';
   const isInsights=nextView==='insights';
+  if(!isInsights)hideHeatmapTip();
   hidden('session-status-strip',!isSession);
   hidden('session-card-stage',!isSession);
   const wasUsage=prevView==='activity'||prevView==='models';
@@ -896,16 +904,21 @@ async function loadInsights(force = false) {
   insightsLoading = true; insightsError = null;
   renderInsightsView();
   try {
+    const requestedDate = selectedHeatmapDate || '';
     const params = new URLSearchParams();
     if (force) params.set('force', '1');
     const statusEl = $('insights-status-filter'), sortEl = $('insights-sort'), searchEl = $('insights-search');
     if (statusEl?.value) params.set('status', statusEl.value);
     if (sortEl?.value) params.set('sort', sortEl.value);
     if (searchEl?.value?.trim()) params.set('query', searchEl.value.trim());
+    if (requestedDate) params.set('date', requestedDate);
     const res = await transportFetch(`/api/insights?${params}`, { cache: 'no-store' });
     if (!res.ok) throw new Error(t('panelUnavailable'));
     const value = await res.json();
-    if (epoch === insightsEpoch) insightsData = value;
+    if (epoch === insightsEpoch) {
+      insightsData = value;
+      insightsLoadedDate = requestedDate || null;
+    }
   } catch (err) {
     if (epoch === insightsEpoch) insightsError = err?.message || t('panelUnavailable');
   } finally {
@@ -949,6 +962,204 @@ function renderDistList(id, items, { tone, metric, formatVal }) {
     wrap.append(row, bar);
     return wrap;
   }));
+}
+
+const MONTHS_EN = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+function parseIsoDay(dateStr) {
+  if (typeof dateStr !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return null;
+  const d = new Date(`${dateStr}T00:00:00Z`);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+let heatmapTipScrollTop = 0, activeHeatmapTipCell = null;
+
+function hideHeatmapTip() {
+  activeHeatmapTipCell = null;
+  const tip = $('insights-heatmap-tip');
+  if (tip) tip.hidden = true;
+}
+
+function positionHeatmapTip(cell) {
+  const tip = $('insights-heatmap-tip');
+  if (!tip || tip.hidden || !cell?.isConnected || panelView !== 'insights') {
+    hideHeatmapTip();
+    return;
+  }
+  const rect = cell.getBoundingClientRect();
+  const rTip = tip.getBoundingClientRect();
+  const frame = $('insights-heatmap-section')?.closest('.widget')?.getBoundingClientRect();
+  const minLeft = Math.max(8, (frame ? frame.left : 0) + 8);
+  const maxRight = Math.min(window.innerWidth - 8, (frame ? frame.right : window.innerWidth) - 8);
+  const maxLeft = Math.max(minLeft, maxRight - rTip.width);
+  const left = Math.max(minLeft, Math.min(maxLeft, rect.left + rect.width / 2 - rTip.width / 2));
+  const above = rect.top - rTip.height - 6;
+  const top = above >= 8 ? above : Math.min(window.innerHeight - rTip.height - 8, rect.bottom + 6);
+  tip.style.left = `${left}px`;
+  tip.style.top = `${top}px`;
+}
+
+function showHeatmapTip(cell, item) {
+  const tip = $('insights-heatmap-tip');
+  if (!tip || !cell || !item) return;
+  activeHeatmapTipCell = cell;
+  heatmapTipScrollTop = $('insights-view')?.scrollTop ?? 0;
+  tip.textContent = t('insightsHeatmapTip', {
+    date: item.date,
+    sessions: smallCount(item.sessions || 0),
+    tokens: compact(item.tokens || 0),
+  });
+  tip.hidden = false;
+  positionHeatmapTip(cell);
+}
+
+function toggleHeatmapDate(nextDate) {
+  selectedHeatmapDate = selectedHeatmapDate === nextDate ? null : nextDate;
+  const total = insightsData?.totalMatchingSessions ?? 0;
+  const loaded = Array.isArray(insightsData?.sessions) ? insightsData.sessions.length : 0;
+  if (insightsLoadedDate || total > loaded) {
+    void loadInsights(false);
+  } else {
+    renderInsightsView();
+  }
+}
+
+function isMonotonicHeatmap(heat) {
+  if (!Array.isArray(heat) || heat.length < 2) return false;
+  let prev = null;
+  for (const item of heat) {
+    const parsed = parseIsoDay(item?.date);
+    if (!parsed) return false;
+    if (prev !== null && parsed.getTime() <= prev) return false;
+    prev = parsed.getTime();
+  }
+  return true;
+}
+
+function renderInsightsHeatmap(heat) {
+  setAttr($('heatmap-metric-sessions'), 'aria-pressed', String(heatmapMetric === 'sessions'));
+  setAttr($('heatmap-metric-tokens'), 'aria-pressed', String(heatmapMetric === 'tokens'));
+  const heatGrid = $('insights-heatmap-grid'), monthsEl = $('insights-heatmap-months'), wdEl = $('insights-heatmap-weekdays');
+  hideHeatmapTip();
+  if (!heatGrid || !heat.length) return;
+
+  const focusDate = document.activeElement?.closest?.('#insights-heatmap-grid')
+    ? document.activeElement.dataset.date || null
+    : null;
+  const vals = heat.map(d => (heatmapMetric === 'tokens' ? d.tokens : d.sessions) || 0);
+  const maxVal = Math.max(1, ...vals);
+
+  let activeDays = 0, streak = 0, peakVal = -1;
+  for (let i = 0; i < heat.length; i++) {
+    if ((heat[i]?.sessions || 0) > 0) activeDays++;
+    if (vals[i] > peakVal) peakVal = vals[i];
+  }
+  for (let i = heat.length - 1; i >= 0; i--) {
+    if ((heat[i]?.sessions || 0) > 0) streak++;
+    else if (i === heat.length - 1) continue;
+    else break;
+  }
+  const peakText = peakVal > 0
+    ? (heatmapMetric === 'tokens' ? `${compact(peakVal)} tok` : t('insightsHeatmapPeakSessions', { n: smallCount(peakVal) }))
+    : '—';
+  text('insights-heatmap-meta', t('insightsHeatmapSummary', {
+    days: smallCount(activeDays),
+    streak: smallCount(streak),
+    peak: peakText,
+  }));
+  text('insights-heatmap-range', heat[0]?.date && heat.at(-1)?.date ? `${heat[0].date.slice(5)} – ${heat.at(-1).date.slice(5)}` : '');
+
+  if (wdEl) {
+    wdEl.replaceChildren(...t('insightsWeekdays').split(',').slice(0, 7).map(lbl => {
+      const sp = document.createElement('span');
+      sp.textContent = lbl;
+      return sp;
+    }));
+  }
+
+  const aligned = isMonotonicHeatmap(heat);
+  const firstDow = aligned ? (parseIsoDay(heat[0].date).getUTCDay() + 6) % 7 : 0;
+  const colsCount = Math.ceil((firstDow + heat.length) / 7);
+  heatGrid.style.setProperty('--hm-cols', String(colsCount));
+
+  if (monthsEl) {
+    monthsEl.style.gridTemplateColumns = `repeat(${colsCount}, minmax(0, 1fr))`;
+    const labels = [];
+    if (aligned) {
+      const zhLang = language.language === 'zh-CN' || language.language === 'zh-TW';
+      let lastMonth = -1, lastCol = -3;
+      for (let c = 0; c < colsCount; c++) {
+        let colMonth = -1;
+        for (let r = 0; r < 7; r++) {
+          const item = heat[c * 7 + r - firstDow];
+          const parsed = parseIsoDay(item?.date);
+          if (!parsed) continue;
+          const m = parsed.getUTCMonth() + 1;
+          if (parsed.getUTCDate() === 1) { colMonth = m; break; }
+          if (colMonth === -1) colMonth = m;
+        }
+        if (colMonth !== -1 && colMonth !== lastMonth) {
+          lastMonth = colMonth;
+          if (c - lastCol >= 2 && (colsCount < 4 || c <= colsCount - 2)) {
+            const sp = document.createElement('span');
+            sp.textContent = zhLang ? `${colMonth}月` : MONTHS_EN[colMonth - 1];
+            sp.style.gridColumn = String(c + 1);
+            sp.style.gridRow = '1';
+            labels.push(sp);
+            lastCol = c;
+          }
+        }
+      }
+    }
+    monthsEl.replaceChildren(...labels);
+  }
+
+  const cols = [];
+  for (let c = 0; c < colsCount; c++) {
+    const col = document.createElement('div');
+    col.className = 'heatmap-col';
+    for (let r = 0; r < 7; r++) {
+      const idx = c * 7 + r - firstDow;
+      const d = idx >= 0 && idx < heat.length ? heat[idx] : null;
+      if (!d) {
+        const pad = document.createElement('span');
+        pad.className = 'heatmap-cell is-pad';
+        pad.setAttribute('aria-hidden', 'true');
+        col.append(pad);
+        continue;
+      }
+      const val = (heatmapMetric === 'tokens' ? d.tokens : d.sessions) || 0;
+      const lvl = val <= 0 ? 0 : Math.min(4, Math.ceil((val / maxVal) * 4));
+      const cell = document.createElement('button');
+      cell.type = 'button';
+      cell.className = 'heatmap-cell';
+      cell.dataset.date = d.date;
+      cell.dataset.level = String(lvl);
+      const label = t('insightsHeatmapTip', {
+        date: d.date,
+        sessions: smallCount(d.sessions || 0),
+        tokens: compact(d.tokens || 0),
+      });
+      setAttr(cell, 'aria-label', label);
+      setAttr(cell, 'aria-pressed', String(selectedHeatmapDate === d.date));
+      cell.addEventListener('pointerenter', () => showHeatmapTip(cell, d));
+      cell.addEventListener('pointerleave', hideHeatmapTip);
+      cell.addEventListener('focus', () => showHeatmapTip(cell, d));
+      cell.addEventListener('blur', hideHeatmapTip);
+      cell.addEventListener('click', () => toggleHeatmapDate(d.date));
+      col.append(cell);
+    }
+    cols.push(col);
+  }
+  heatGrid.replaceChildren(...cols);
+  if (focusDate) {
+    for (const btn of heatGrid.querySelectorAll('button[data-date]')) {
+      if (btn.dataset.date === focusDate) {
+        btn.focus({ preventScroll: true });
+        break;
+      }
+    }
+  }
 }
 
 function renderInsightsView() {
@@ -1049,31 +1260,8 @@ function renderInsightsView() {
   }
 
   // Activity heatmap
-  setAttr($('heatmap-metric-sessions'), 'aria-pressed', String(heatmapMetric === 'sessions'));
-  setAttr($('heatmap-metric-tokens'), 'aria-pressed', String(heatmapMetric === 'tokens'));
-  const heatGrid = $('insights-heatmap-grid');
   const heat = Array.isArray(insightsData.heatmap) ? insightsData.heatmap : [];
-  if (heatGrid && heat.length) {
-    const vals = heat.map(d => heatmapMetric === 'tokens' ? d.tokens : d.sessions);
-    const maxVal = Math.max(1, ...vals);
-    const cols = [];
-    for (let c = 0; c < Math.ceil(heat.length / 7); c++) {
-      const col = document.createElement('div'); col.className = 'heatmap-col';
-      for (let r = 0; r < 7; r++) {
-        const d = heat[c * 7 + r];
-        const cell = document.createElement('div'); cell.className = 'heatmap-cell';
-        if (d) {
-          const val = heatmapMetric === 'tokens' ? d.tokens : d.sessions;
-          const lvl = val <= 0 ? 0 : Math.min(4, Math.ceil((val / maxVal) * 4));
-          cell.dataset.level = String(lvl);
-          setAttr(cell, 'title', `${d.date} · ${d.sessions} · ${compact(d.tokens)} tok`);
-        }
-        col.append(cell);
-      }
-      cols.push(col);
-    }
-    heatGrid.replaceChildren(...cols);
-  }
+  renderInsightsHeatmap(heat);
 
   // Token composition across sessions
   const ic = insightsData.composition || {};
@@ -1141,15 +1329,26 @@ function renderInsightsView() {
   });
 
   // Sessions list
-  const sessions = Array.isArray(insightsData.sessions) ? insightsData.sessions : [];
-  text('insights-sessions-title', t('insightsSessionsTitle', { n: count(insightsData.totalMatchingSessions ?? sessions.length) }));
+  const allSessions = Array.isArray(insightsData.sessions) ? insightsData.sessions : [];
+  const sessions = selectedHeatmapDate
+    ? allSessions.filter(s => Array.isArray(s.activeDates) && s.activeDates.includes(selectedHeatmapDate))
+    : allSessions;
+  const dateFilterBtn = $('insights-date-filter');
+  if (dateFilterBtn) {
+    dateFilterBtn.hidden = !selectedHeatmapDate;
+    dateFilterBtn.textContent = selectedHeatmapDate ? t('insightsHeatmapClearDate', { date: selectedHeatmapDate }) : '';
+  }
+  text('insights-sessions-title', t('insightsSessionsTitle', { n: count(selectedHeatmapDate ? sessions.length : (insightsData.totalMatchingSessions ?? sessions.length)) }));
   if (insightsData.cacheInfo) {
     text('insights-cache-meta', t('insightsCacheMeta', { total: insightsData.cacheInfo.totalScanned, ms: insightsData.cacheInfo.scanMs }));
   }
   const sessList = $('insights-sessions-list');
   if (sessList) {
     if (!sessions.length) {
-      sessList.replaceChildren(Object.assign(document.createElement('div'), { className: 'insights-status', textContent: t('insightsEmpty') }));
+      sessList.replaceChildren(Object.assign(document.createElement('div'), {
+        className: 'insights-status',
+        textContent: selectedHeatmapDate ? t('insightsEmptyDate', { date: selectedHeatmapDate }) : t('insightsEmpty'),
+      }));
     } else {
       sessList.replaceChildren(...sessions.slice(0, 100).map(s => {
         const btn = document.createElement('button'); btn.type = 'button'; btn.className = 'session-row';
@@ -1888,7 +2087,7 @@ function refresh(force = false, {usageSync=false}={}) {
     const preservedUsage = reqScopeEpoch !== scopeRequestEpoch && snapshot?.usage ? snapshot.usage : value.usage;
     snapshot = preservedUsage === value.usage ? value : {...value, usage: preservedUsage};
     if(Object.hasOwn(value,'theme'))themeController.setHostTheme(value.theme);
-    if(value.preferences){didSyncUsageScope=true;syncUsageGuide(value.preferences);preferences.sync(value.preferences);speedStyle.sync(value.preferences);hostUiLocalization.sync(value.preferences);usageScope.sync(value.preferences);}
+    if(value.preferences){didSyncUsageScope=true;syncUsageGuide(value.preferences);preferences.sync(value.preferences);speedStyle.sync(value.preferences);hostUiLocalization.sync(value.preferences);barColorsPref.sync(value.preferences);themeModePref.sync(value.preferences);usageScope.sync(value.preferences);}
     serverOffset = Date.parse(value.serverTime) - Date.now();
     if (!Number.isFinite(serverOffset)) serverOffset = 0;
     render();
@@ -1946,6 +2145,11 @@ $('insights-search')?.addEventListener('input',()=>{
 });
 $('heatmap-metric-sessions')?.addEventListener('click',()=>{heatmapMetric='sessions';renderInsightsView();});
 $('heatmap-metric-tokens')?.addEventListener('click',()=>{heatmapMetric='tokens';renderInsightsView();});
+$('insights-date-filter')?.addEventListener('click',()=>{toggleHeatmapDate(null);});
+$('insights-view')?.addEventListener('scroll',()=>{const cur=$('insights-view')?.scrollTop??0;if(Math.abs(cur-heatmapTipScrollTop)>=2)hideHeatmapTip();},{passive:true});
+const syncHeatmapTipPosition=()=>{if(activeHeatmapTipCell)positionHeatmapTip(activeHeatmapTipCell);};
+window.addEventListener('resize',syncHeatmapTipPosition);
+if(typeof ResizeObserver==='function'&&$('insights-heatmap-grid'))new ResizeObserver(syncHeatmapTipPosition).observe($('insights-heatmap-grid'));
 
 $('quota-group').addEventListener('change', event => { selectedGroup = event.target.value === autoGroupId ? null : event.target.value; render(); });
 $('refresh-button').addEventListener('click', refreshManually);

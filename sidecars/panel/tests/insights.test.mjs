@@ -91,6 +91,8 @@ test('InsightsScanner uses 64-shard incremental cache and builds filtered/sorted
   assert.equal(ov1.kpis.totalSessionsForPricing, 2);
   assert.equal(ov1.last7Days.length, 7);
   assert.equal(ov1.heatmap.length, 112);
+  assert.deepEqual(ov1.sessions[0].activeDates, ['2026-11-21']);
+  assert.deepEqual(ov1.sessions[1].activeDates, ['2026-11-20']);
 
   const scanner2 = new InsightsScanner({ brainRoot, cacheDir, useWorker: false });
   const ov2 = await scanner2.overview({
@@ -126,4 +128,61 @@ test('parseTranscriptSummaryStream resolves .worktrees paths cleanly without cre
   ].join('\n') + '\n');
   const summary = await parseTranscriptSummaryStream(file, ID1);
   assert.equal(summary.project, 'demo-repo');
+});
+
+test('buildInsightsOverview applies date filter before 200-session truncation and aligns activeDates with log days', () => {
+  const summaries = [];
+  for (let i = 0; i < 204; i++) {
+    const id = `00000000-0000-4000-8000-${String(i + 1).padStart(12, '0')}`;
+    summaries.push({
+      id,
+      project: 'demo-repo',
+      lastAt: `2026-11-22T0${i % 9}:00:00Z`,
+      firstAt: `2026-11-22T0${i % 9}:00:00Z`,
+      rounds: 1,
+      steps: 1,
+      totalTokens: 1000,
+      days: { '2026-11-22': { sessions: 1, totalTokens: 1000 } },
+    });
+  }
+  // Session #205 on older date + UTC boundary session whose modifiedAt is Nov 1 UTC (= Nov 2 Asia/Shanghai)
+  const oldId = '00000000-0000-4000-8000-999999999999';
+  summaries.push({
+    id: oldId,
+    project: 'old-proj',
+    lastAt: '2026-10-01T12:00:00Z',
+    firstAt: '2026-10-01T12:00:00Z',
+    rounds: 1,
+    steps: 1,
+    totalTokens: 500,
+    days: { '2026-10-01': { sessions: 1, totalTokens: 500 } },
+  });
+  const tzId = '00000000-0000-4000-8000-888888888888';
+  summaries.push({
+    id: tzId,
+    project: 'tz-proj',
+    lastAt: '2026-11-01T17:00:00Z',
+    firstAt: '2026-11-01T17:00:00Z',
+    rounds: 1,
+    steps: 1,
+    totalTokens: 700,
+    days: { '2026-11-02': { sessions: 1, totalTokens: 700 } },
+  });
+
+  const unfiltered = buildInsightsOverview(summaries, { now: Date.parse('2026-11-22T12:00:00Z') });
+  assert.equal(unfiltered.kpis.totalSessions, 206);
+  assert.equal(unfiltered.totalMatchingSessions, 206);
+  assert.equal(unfiltered.sessions.length, 200);
+
+  const filteredOld = buildInsightsOverview(summaries, { now: Date.parse('2026-11-22T12:00:00Z'), date: '2026-10-01' });
+  assert.equal(filteredOld.kpis.totalSessions, 206);
+  assert.equal(filteredOld.totalMatchingSessions, 1);
+  assert.equal(filteredOld.sessions.length, 1);
+  assert.equal(filteredOld.sessions[0].id, oldId);
+
+  const filteredNov01 = buildInsightsOverview(summaries, { now: Date.parse('2026-11-22T12:00:00Z'), date: '2026-11-01' });
+  assert.equal(filteredNov01.totalMatchingSessions, 0);
+  const filteredNov02 = buildInsightsOverview(summaries, { now: Date.parse('2026-11-22T12:00:00Z'), date: '2026-11-02' });
+  assert.equal(filteredNov02.sessions[0].id, tzId);
+  assert.deepEqual(filteredNov02.sessions[0].activeDates, ['2026-11-02']);
 });

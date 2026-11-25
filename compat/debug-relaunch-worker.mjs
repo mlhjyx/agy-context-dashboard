@@ -177,7 +177,10 @@ export async function runRelaunchWorker(rawPayload, deps = {}) {
   });
   child?.unref?.();
   const startup = await watchEarlyExit(child, earlyExitWindowMs, sleepImpl);
-  await record({ outcome: startup.state, ...startup, state: undefined });
+  const outcome = platform === 'darwin' && launchCommand === 'open' && startup.state === 'exited-early' && startup.code === 0 && startup.signal == null
+    ? 'launched'
+    : startup.state;
+  await record({ outcome, ...startup, state: undefined });
   return { launched: true, command: launchCommand, args: launchArgs, pidsCleared: pids };
 }
 

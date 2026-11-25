@@ -151,11 +151,14 @@ const insightsPayload = {
     totalTokens: (i + 1) * 50000,
     estimatedCostUsd: (i + 1) * 0.15,
   })),
-  heatmap: Array.from({ length: 112 }, (_, i) => ({
-    date: `2026-08-${String((i % 28) + 1).padStart(2, '0')}`,
-    sessions: i % 5 === 0 ? 3 : 1,
-    tokens: (i % 7) * 40000,
-  })),
+  heatmap: Array.from({ length: 112 }, (_, i) => {
+    const d = new Date(Date.UTC(2026, 7, 3 + i));
+    return {
+      date: d.toISOString().slice(0, 10),
+      sessions: i >= 109 ? (i === 111 ? 3 : 2) : (i % 17 === 0 ? 1 : 0),
+      tokens: i >= 109 ? (i - 108) * 60000 : (i % 17 === 0 ? 25000 : 0),
+    };
+  }),
   composition: { uncached: 108000, cacheRead: 432000, cacheWrite: 0, output: 8400 },
   distributions: {
     projects: [{ name: 'agy-context-dashboard', sessions: 2, tokens: 540000 }],
@@ -166,8 +169,8 @@ const insightsPayload = {
   },
   totalMatchingSessions: 2,
   sessions: [
-    { id: cidA, title: 'Session Alpha', project: 'agy-context-dashboard', model: 'Gemini 4 Neon (High)', status: 'IDLE', archived: false, rounds: 5, steps: 20, totalTokens: 320000, currentContextTokens: 120000, cacheHitRate: 0.8, estimatedCostUsd: 0.42 },
-    { id: cidB, title: 'Session Beta', project: 'agy-context-dashboard', model: 'Claude Sonnet 4.6', status: 'ARCHIVED', archived: true, rounds: 4, steps: 15, totalTokens: 220000, currentContextTokens: 90000, cacheHitRate: 0.8, estimatedCostUsd: 0.86 },
+    { id: cidA, title: 'Session Alpha', project: 'agy-context-dashboard', model: 'Gemini 4 Neon (High)', status: 'IDLE', archived: false, rounds: 5, steps: 20, totalTokens: 320000, currentContextTokens: 120000, cacheHitRate: 0.8, estimatedCostUsd: 0.42, activeDates: ['2026-11-22'] },
+    { id: cidB, title: 'Session Beta', project: 'agy-context-dashboard', model: 'Claude Sonnet 4.6', status: 'ARCHIVED', archived: true, rounds: 4, steps: 15, totalTokens: 220000, currentContextTokens: 90000, cacheHitRate: 0.8, estimatedCostUsd: 0.86, activeDates: ['2026-11-20'] },
   ],
   cacheInfo: { totalScanned: 2, parsedNow: 0, cacheHits: 2, scanMs: 12, shardCount: 64 },
 };
@@ -342,10 +345,14 @@ const server = createServer(async (req, res) => {
   if (url.pathname === '/api/insights') {
     const status = url.searchParams.get('status') || 'all';
     const sort = url.searchParams.get('sort') || 'recent';
-    calls.insights.push({ status, sort });
-    const filtered = status === 'archived' ? insightsPayload.sessions.filter(s => s.archived) : insightsPayload.sessions;
+    const date = url.searchParams.get('date') || '';
+    calls.insights.push({ status, sort, date });
+    let filtered = status === 'archived' ? insightsPayload.sessions.filter(s => s.archived) : insightsPayload.sessions;
+    if (date) filtered = filtered.filter(s => Array.isArray(s.activeDates) && s.activeDates.includes(date));
+    const total = sort === 'cost' && !date ? 201 : filtered.length;
+    const rows = sort === 'cost' && !date ? filtered.slice(0, 1) : filtered;
     res.setHeader('Content-Type', 'application/json');
-    res.end(JSON.stringify({ ...insightsPayload, sessions: filtered, totalMatchingSessions: filtered.length }));
+    res.end(JSON.stringify({ ...insightsPayload, sessions: rows, totalMatchingSessions: total }));
     return;
   }
   res.writeHead(404); res.end();
@@ -459,16 +466,24 @@ try {
   await page.waitForFunction(() => Boolean(document.querySelector('#usage-embed > div')?.shadowRoot?.querySelector('#heat button')));
   const activityCheck = await page.evaluate(() => {
     const sr = document.querySelector('#usage-embed > div').shadowRoot;
+    const wrap = sr.querySelector('.heat-wrap');
+    const firstBtn = sr.querySelector('#heat button');
+    const r = firstBtn?.getBoundingClientRect();
     return {
       overviewHidden: sr.getElementById('overview').hidden,
       detailsHidden: sr.getElementById('details').hidden,
       heatCount: sr.querySelectorAll('#heat button').length,
+      heatOverflow: wrap ? wrap.scrollWidth > wrap.clientWidth : true,
+      cellW: r ? r.width : 0,
+      cellDiff: r ? Math.abs(r.width - r.height) : 99,
       tabsHidden: sr.querySelector('.tabs-bar')?.dataset.hideTabs,
     };
   });
   assert.equal(activityCheck.overviewHidden, false);
   assert.equal(activityCheck.detailsHidden, true);
-  assert.ok(activityCheck.heatCount >= 365);
+  assert.ok(activityCheck.heatCount >= 84 && activityCheck.heatCount <= 140 && activityCheck.heatCount % 7 === 0, `Expected responsive 12-20 week window in embedded sidebar, got ${activityCheck.heatCount}`);
+  assert.equal(activityCheck.heatOverflow, false, 'Embedded Token activity heatmap must not overflow horizontally');
+  assert.ok(activityCheck.cellW >= 12 && activityCheck.cellDiff <= 1.5, `Expected crisp square cells, got ${JSON.stringify(activityCheck)}`);
   assert.equal(activityCheck.tabsHidden, 'true');
 
   // Clicking "View breakdown" inside embedded Activity switches top-level panel tab to By model
@@ -532,6 +547,75 @@ try {
 
   await page.locator('#heatmap-metric-tokens').click();
   assert.equal(await page.locator('#heatmap-metric-tokens').getAttribute('aria-pressed'), 'true');
+  const hmGeometry = await page.evaluate(() => {
+    const cells = [...document.querySelectorAll('#insights-heatmap-grid button.heatmap-cell')];
+    const rects = cells.map(c => c.getBoundingClientRect());
+    const maxDiff = Math.max(...rects.map(r => Math.abs(r.width - r.height)));
+    const minW = Math.min(...rects.map(r => r.width));
+    return {
+      count: cells.length,
+      maxDiff,
+      minW,
+      meta: document.getElementById('insights-heatmap-meta')?.textContent || '',
+      months: [...document.querySelectorAll('#insights-heatmap-months span')].map(s => [s.textContent, s.style.gridColumn]),
+      weekdays: [...document.querySelectorAll('#insights-heatmap-weekdays span')].map(s => s.textContent).filter(Boolean),
+    };
+  });
+  assert.equal(hmGeometry.count, 112);
+  assert.ok(hmGeometry.maxDiff <= 1.2, `Heatmap cells must be square, maxDiff=${hmGeometry.maxDiff}`);
+  assert.ok(hmGeometry.minW >= 10, `Heatmap cells must fit crisply, minW=${hmGeometry.minW}`);
+  assert.match(hmGeometry.meta, /Streak 3d/);
+  assert.match(hmGeometry.meta, /180K tok/);
+  assert.ok(hmGeometry.months.length >= 2);
+  assert.equal(hmGeometry.months.find(([m]) => m === 'Sep')?.[1], '5');
+  assert.deepEqual(hmGeometry.weekdays, ['M', 'W', 'F']);
+
+  const targetCell = page.locator('#insights-heatmap-grid button.heatmap-cell[data-date="2026-11-22"]');
+  await targetCell.hover();
+  await page.locator('#insights-heatmap-tip').waitFor({ state: 'visible' });
+  assert.match(await page.locator('#insights-heatmap-tip').textContent(), /2026-11-22.*180K tok/);
+  await page.mouse.move(10, 10);
+  await targetCell.focus();
+  await page.locator('#insights-heatmap-tip').waitFor({ state: 'visible' });
+  await page.setViewportSize({ width: 280, height: 700 });
+  await page.waitForFunction(() => {
+    const tip = document.getElementById('insights-heatmap-tip');
+    if (!tip || tip.hidden) return true;
+    const r = tip.getBoundingClientRect();
+    return r.left >= 8 && r.right <= window.innerWidth;
+  }, undefined, { timeout: 2000 });
+  await page.evaluate(() => document.activeElement?.blur?.());
+  await targetCell.focus();
+  await page.locator('#insights-heatmap-tip').waitFor({ state: 'visible' });
+  const tipBoxNarrow = await page.locator('#insights-heatmap-tip').evaluate(e => {
+    const r = e.getBoundingClientRect();
+    return { hidden: e.hidden, left: r.left, right: r.right, iw: window.innerWidth };
+  });
+  assert.equal(tipBoxNarrow.hidden, false);
+  assert.ok(tipBoxNarrow.left >= 8 && tipBoxNarrow.right <= tipBoxNarrow.iw, `Tooltip must stay in viewport: ${JSON.stringify(tipBoxNarrow)}`);
+  await page.setViewportSize({ width: 460, height: 700 });
+  await page.evaluate(() => document.activeElement?.blur?.());
+  await targetCell.click();
+  assert.equal(await targetCell.getAttribute('aria-pressed'), 'true');
+  assert.equal(await page.locator('#insights-date-filter').isVisible(), true);
+  assert.equal(await page.locator('#insights-sessions-list .session-row').count(), 1);
+  assert.match(await page.locator('#insights-sessions-list .session-row').first().textContent(), /Session Alpha/);
+  await page.locator('#insights-date-filter').click();
+  assert.equal(await page.locator('#insights-date-filter').isVisible(), false);
+  assert.equal(await page.locator('#insights-sessions-list .session-row').count(), 2);
+
+  // Verify pre-truncation (>200) date filter re-queries server with date parameter
+  await page.locator('#insights-sort').selectOption('cost');
+  await page.locator('#insights-sessions-title').filter({ hasText: '201' }).waitFor();
+  assert.equal(await page.locator('#insights-sessions-list .session-row').count(), 1);
+  await page.locator('#insights-heatmap-grid button.heatmap-cell[data-date="2026-11-20"]').click();
+  await page.locator('#insights-sessions-list .session-row').filter({ hasText: 'Session Beta' }).waitFor();
+  assert.equal(calls.insights.at(-1)?.date, '2026-11-20');
+  await page.locator('#insights-date-filter').click();
+  await page.locator('#insights-sessions-title').filter({ hasText: '201' }).waitFor();
+  await page.locator('#insights-sort').selectOption('recent');
+  await page.locator('#insights-sessions-title').filter({ hasText: 'Sessions (2)' }).waitFor();
+  assert.equal(await page.locator('#insights-sessions-list .session-row').count(), 2);
 
   await page.locator('#insights-status-filter').selectOption('archived');
   await page.locator('#insights-sessions-list .session-row').filter({ hasText: 'Session Beta' }).waitFor();

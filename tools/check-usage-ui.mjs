@@ -211,6 +211,23 @@ try{
    assert.equal(r.firstLegend,r.firstRow,`embed ${w}px ${per} legend order`);
   }
  }
+ await embedPage.evaluate(()=>{window.__embedUd.setTab('overview');});
+ const embedHeatCols=[];
+ for(const w of [420,280]){
+  await embedPage.evaluate(px=>{window.__embedHost.style.width=px+'px';},w);
+  await embedPage.waitForTimeout(100);
+  const hCheck=await embedPage.evaluate(()=>{
+   const sr=window.__embedHost.querySelector('#usage-embed > div').shadowRoot,wrap=sr.querySelector('.heat-wrap'),btns=[...sr.querySelectorAll('#heat button')],empty=btns.find(b=>b.dataset.level==='0'),sw=sr.querySelector('.swatch:not([data-level])'),r=btns[0]?.getBoundingClientRect();
+   return {count:btns.length,cols:btns.length/7,overflow:wrap?wrap.scrollWidth>wrap.clientWidth:true,swatchBorder:sw?getComputedStyle(sw).borderTopColor:'rgba(0, 0, 0, 0)',emptyBorder:empty?getComputedStyle(empty).borderTopColor:null,cellW:r?.width||0,diff:r?Math.abs(r.width-r.height):99};
+  });
+  assert.ok(hCheck.count>=84&&hCheck.count<=140&&hCheck.count%7===0,`embed ${w}px heat count=${hCheck.count}`);
+  assert.equal(hCheck.overflow,false,`embed ${w}px heatmap must not overflow horizontally`);
+  assert.notEqual(hCheck.swatchBorder,'rgba(0, 0, 0, 0)',`embed ${w}px empty scale swatch should show hairline border`);
+  if(hCheck.emptyBorder!==null)assert.notEqual(hCheck.emptyBorder,'rgba(0, 0, 0, 0)',`embed ${w}px empty heat cell should show hairline border`);
+  assert.ok(hCheck.cellW>=12&&hCheck.diff<=1.5,`embed ${w}px heat cells must stay crisp squares: ${JSON.stringify(hCheck)}`);
+  embedHeatCols.push(hCheck.cols);
+ }
+ assert.ok(embedHeatCols[0]>embedHeatCols[1],`embed 420px (${embedHeatCols[0]}w) should render more columns than 280px (${embedHeatCols[1]}w)`);
  await embedPage.close();
  assert.deepEqual(errors,[]);console.log(JSON.stringify({host:ide?'ide':'desktop',trustedTypes:ide,checks:'Usage entry and onboarding persistence/retry/local replay; hover dismissal and keyboard return; themed year menu; stable frame; heatmap and model chart/filter; polling; language/theme; narrow layout; account isolation; missing snapshots and composer replacement',passed:true}));
 }finally{await browser.close();await new Promise(r=>server.close(r));}

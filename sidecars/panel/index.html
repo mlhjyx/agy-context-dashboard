@@ -221,7 +221,24 @@
             <button class="mini-seg-btn" id="heatmap-metric-tokens" type="button" aria-pressed="false" data-i18n="insightsHeatmapTokens">Tokens</button>
           </span>
         </div>
-        <div class="insights-heatmap-grid" id="insights-heatmap-grid"></div>
+        <div class="insights-heatmap-meta" id="insights-heatmap-meta"></div>
+        <div class="insights-heatmap-board">
+          <div class="insights-heatmap-months" id="insights-heatmap-months" aria-hidden="true"></div>
+          <div class="insights-heatmap-weekdays" id="insights-heatmap-weekdays" aria-hidden="true"></div>
+          <div class="insights-heatmap-grid" id="insights-heatmap-grid"></div>
+        </div>
+        <div class="insights-heatmap-foot">
+          <span class="insights-heatmap-range" id="insights-heatmap-range"></span>
+          <div class="insights-heatmap-scale" id="insights-heatmap-scale" aria-hidden="true">
+            <span data-i18n="insightsHeatmapLess">Less</span>
+            <i class="heatmap-swatch"></i>
+            <i class="heatmap-swatch" data-level="1"></i>
+            <i class="heatmap-swatch" data-level="2"></i>
+            <i class="heatmap-swatch" data-level="3"></i>
+            <i class="heatmap-swatch" data-level="4"></i>
+            <span data-i18n="insightsHeatmapMore">More</span>
+          </div>
+        </div>
       </div>
       <div class="insights-panel" id="insights-comp-section">
         <div class="insights-panel-head"><span data-i18n="insightsCompTitle">Token composition</span><span class="tag" id="insights-comp-meta"></span></div>
@@ -235,10 +252,11 @@
         <div class="insights-dist-card"><div class="insights-dist-head"><span class="insights-dist-title" data-i18n="insightsCommands">Commands run</span><span class="insights-dist-sub" id="insights-dist-commands-sub"></span></div><div class="insights-dist-list" id="insights-dist-commands"></div></div>
       </div>
       <div class="insights-panel">
-        <div class="insights-panel-head"><span id="insights-sessions-title">Sessions</span><span class="tag" id="insights-cache-meta"></span></div>
+        <div class="insights-panel-head"><span class="insights-sessions-head-left"><span id="insights-sessions-title">Sessions</span><button class="insights-date-filter" id="insights-date-filter" type="button" hidden></button></span><span class="tag" id="insights-cache-meta"></span></div>
         <div class="insights-sessions-list" id="insights-sessions-list"></div>
       </div>
     </section>
+    <div class="heatmap-tip" id="insights-heatmap-tip" role="status" hidden></div>
     <div class="health-note" id="health-note" role="status">Waiting for the first update</div>
     <div class="health-note" id="integration-note" role="status"></div>
   </main>

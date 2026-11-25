@@ -378,6 +378,7 @@ export function buildInsightsOverview(summaries, {
   status = 'all',
   sort = 'recent',
   query = '',
+  date = '',
   now = Date.now(),
   timeZone = 'Asia/Shanghai',
   cacheInfo = null,
@@ -492,6 +493,8 @@ export function buildInsightsOverview(summaries, {
 
     const title = cleanText(live?.summary || '', 120) || (item.project ? `${item.project} · ${id.slice(0, 8)}` : `Session ${id.slice(0, 8)}`);
     const modifiedAt = live?.lastModifiedTime || item.lastAt || item.firstAt || null;
+    const modifiedMs = modifiedAt ? Date.parse(modifiedAt) || 0 : 0;
+    const activeDates = Object.keys(item.days || {}).sort();
     const rowStatus = isArchived ? 'ARCHIVED' : cleanText(String(live?.status || '').replace(/^CASCADE_RUN_STATUS_/, ''), 32) || 'IDLE';
 
     if (status === 'active' && isArchived) continue;
@@ -506,7 +509,8 @@ export function buildInsightsOverview(summaries, {
       status: rowStatus,
       archived: isArchived,
       modifiedAt,
-      modifiedMs: modifiedAt ? Date.parse(modifiedAt) || 0 : 0,
+      modifiedMs,
+      activeDates,
       rounds: item.rounds || 0,
       steps: Math.max(item.steps || 0, countOrZero(live?.stepCount)),
       totalTokens: sessTotal,
@@ -553,6 +557,9 @@ export function buildInsightsOverview(summaries, {
     .sort((a, b) => b.totalTokens - a.totalTokens)
     .slice(0, 10);
 
+  const validDate = typeof date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : '';
+  const visibleRows = validDate ? sessionRows.filter(row => row.activeDates.includes(validDate)) : sessionRows;
+
   return {
     version: 1,
     today,
@@ -592,8 +599,8 @@ export function buildInsightsOverview(summaries, {
       commands: [...commandMap.entries()].map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count).slice(0, 12),
       models: modelDist,
     },
-    totalMatchingSessions: sessionRows.length,
-    sessions: sessionRows.slice(0, 200).map(({ modifiedMs: _ignore, ...row }) => row),
+    totalMatchingSessions: visibleRows.length,
+    sessions: visibleRows.slice(0, 200).map(({ modifiedMs: _ignore, ...row }) => row),
     cacheInfo: cacheInfo || null,
   };
 }
@@ -836,6 +843,7 @@ export class InsightsScanner {
     status = 'all',
     sort = 'recent',
     query = '',
+    date = '',
   } = {}) {
     const { summaries, cacheInfo } = await this.scan({ force });
     return buildInsightsOverview(summaries, {
@@ -844,6 +852,7 @@ export class InsightsScanner {
       status,
       sort,
       query,
+      date,
       now: this.now(),
       timeZone: this.timeZone,
       cacheInfo,

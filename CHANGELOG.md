@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.0.1 — 2026-11-24
+
+- **Per-item bottom bar color customization & non-modal settings ([#76](https://github.com/wycocoyu/agy-context-dashboard/issues/76), [#69](https://github.com/wycocoyu/agy-context-dashboard/pull/69))**: Keep the default bottom bar borderless with accent-blue high cache-hit rate (`>= 70%`), add a non-modal anchored Settings popover above the bar with `auto / light / dark` polarity control, high-hit accent/semantic toggle, and independent default/preset/custom color pickers for `Speed`, `Token`, `Quota`, and `Context`, plus a synced inline cache-hit quick switch inside the `Token · Cache` card.
+- **Minimal strip collapse & model selector width guard ([#72](https://github.com/wycocoyu/agy-context-dashboard/issues/72), [#84](https://github.com/wycocoyu/agy-context-dashboard/pull/84))**: Preserve main composer model selector width cleanly without truncation via a `compact-text` intermediate tier and `icons-only` fallback, and add a persisted full/minimal collapse toggle.
+- **Insights heatmap, usage windowing, config drilldown & Remote SSH ([#63](https://github.com/wycocoyu/agy-context-dashboard/issues/63), [#64](https://github.com/wycocoyu/agy-context-dashboard/issues/64), [#65](https://github.com/wycocoyu/agy-context-dashboard/issues/65), [#66](https://github.com/wycocoyu/agy-context-dashboard/issues/66), [#74](https://github.com/wycocoyu/agy-context-dashboard/pull/74))**: Unified `Token · Cache` IA labels, redesigned Insights square activity heatmap with date filters, added responsive sidebar usage heatmap windowing, upgraded rules & skills drilldown, and added Remote SSH telemetry + fallback handling.
+
 ## 1.0.0 — 2026-11-23
 
 - **Custom inline status bar ([#60](https://github.com/wycocoyu/agy-context-dashboard/issues/60))**: Show or hide individual chips (`Speed`, `Total`, `Quota`, `Context`), reorder chips via drag-and-drop or `↑`/`↓` buttons, switch the Context ring between `rounds`, `label`, and `compact`, and access bar customization from both the panel header and footer without lockout.

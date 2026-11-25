@@ -1,11 +1,14 @@
 {
-  "version": "0.9.8",
+  "version": "1.0.1",
   "source": "compat/inline-widget.cjs + sidecars/panel",
   "data": "illustrative",
   "scale": 2,
   "files": [
     "hero.png",
     "responsive.png",
+    "density-modes.png",
+    "theme-colors.png",
+    "settings-dialog.png",
     "speed.png",
     "widget.png",
     "quota.png",
@@ -17,6 +20,9 @@
     "panel-insights.png",
     "hero-zh.png",
     "responsive-zh.png",
+    "density-modes-zh.png",
+    "theme-colors-zh.png",
+    "settings-dialog-zh.png",
     "speed-zh.png",
     "widget-zh.png",
     "quota-zh.png",
@@ -46,7 +52,7 @@
     },
     {
       "scope": "subagent",
-      "density": "full",
+      "density": "compact-text",
       "context": "12%",
       "cache": "75.0%",
       "tps": "160.0",
@@ -62,7 +68,23 @@
     },
     {
       "scope": "main",
-      "density": "full",
+      "density": "compact-text",
+      "context": "44%",
+      "cache": "83.8%",
+      "tps": "145.1",
+      "nativeTargetsSafe": true
+    },
+    {
+      "scope": "main",
+      "density": "minimal",
+      "context": "44%",
+      "cache": "83.8%",
+      "tps": "145.1",
+      "nativeTargetsSafe": true
+    },
+    {
+      "scope": "main",
+      "density": "icons",
       "context": "44%",
       "cache": "83.8%",
       "tps": "145.1",
@@ -111,6 +133,54 @@
     {
       "scope": "main",
       "density": "full",
+      "context": "44%",
+      "cache": "83.8%",
+      "tps": "145.1",
+      "nativeTargetsSafe": true
+    },
+    {
+      "scope": "main",
+      "density": "full",
+      "context": "44%",
+      "cache": "83.8%",
+      "tps": "145.1",
+      "nativeTargetsSafe": true
+    },
+    {
+      "scope": "main",
+      "density": "full",
+      "context": "44%",
+      "cache": "83.8%",
+      "tps": "145.1",
+      "nativeTargetsSafe": true
+    },
+    {
+      "scope": "main",
+      "density": "full",
+      "context": "44%",
+      "cache": "83.8%",
+      "tps": "145.1",
+      "nativeTargetsSafe": true
+    },
+    {
+      "scope": "main",
+      "density": "full",
+      "context": "44%",
+      "cache": "83.8%",
+      "tps": "145.1",
+      "nativeTargetsSafe": true
+    },
+    {
+      "scope": "main",
+      "density": "full",
+      "context": "44%",
+      "cache": "83.8%",
+      "tps": "145.1",
+      "nativeTargetsSafe": true
+    },
+    {
+      "scope": "main",
+      "density": "compact-text",
       "context": "44%",
       "cache": "83.8%",
       "tps": "145.1",
@@ -126,10 +196,74 @@
     },
     {
       "scope": "subagent",
-      "density": "full",
+      "density": "icons",
       "context": "12%",
       "cache": "75.0%",
       "tps": "160.0",
+      "nativeTargetsSafe": true
+    },
+    {
+      "scope": "main",
+      "density": "full",
+      "context": "44%",
+      "cache": "83.8%",
+      "tps": "145.1",
+      "nativeTargetsSafe": true
+    },
+    {
+      "scope": "main",
+      "density": "compact-text",
+      "context": "44%",
+      "cache": "83.8%",
+      "tps": "145.1",
+      "nativeTargetsSafe": true
+    },
+    {
+      "scope": "main",
+      "density": "minimal",
+      "context": "44%",
+      "cache": "83.8%",
+      "tps": "145.1",
+      "nativeTargetsSafe": true
+    },
+    {
+      "scope": "main",
+      "density": "icons",
+      "context": "44%",
+      "cache": "83.8%",
+      "tps": "145.1",
+      "nativeTargetsSafe": true
+    },
+    {
+      "scope": "main",
+      "density": "full",
+      "context": "44%",
+      "cache": "83.8%",
+      "tps": "145.1",
+      "nativeTargetsSafe": true
+    },
+    {
+      "scope": "main",
+      "density": "full",
+      "context": "44%",
+      "cache": "83.8%",
+      "tps": "145.1",
+      "nativeTargetsSafe": true
+    },
+    {
+      "scope": "main",
+      "density": "full",
+      "context": "44%",
+      "cache": "83.8%",
+      "tps": "145.1",
+      "nativeTargetsSafe": true
+    },
+    {
+      "scope": "main",
+      "density": "full",
+      "context": "44%",
+      "cache": "83.8%",
+      "tps": "145.1",
       "nativeTargetsSafe": true
     },
     {
